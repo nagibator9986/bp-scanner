@@ -1,20 +1,27 @@
 services:
-  # База данных MongoDB
+  # База данных MongoDB (порт открыт только на localhost хоста)
   mongodb:
     image: mongo:latest
     container_name: nurbank_db
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: always
 
   # Бэкенд (FastAPI)
   backend:
-    image: ps_ai_backend:latest  # Используем ваш готовый образ
+    build: ./backend
+    image: ps_ai_backend:latest
     container_name: nurbank_backend
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     env_file: ./backend/.env
     environment:
       - MONGO_URL=mongodb://mongodb:27017
@@ -25,12 +32,18 @@ services:
       - backend_uploads:/app/app/uploads # Хранилище для документов
     restart: always
 
-  # Фронтенд (React + Nginx)
+  # Фронтенд (React + Nginx); /api проксируется на бэкенд
   frontend:
-    image: ps_ai_frontend:latest # Используем ваш готовый образ
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_BACKEND_URL: /api
+    image: ps_ai_frontend:latest
     container_name: nurbank_frontend
     depends_on:
       - backend
+    environment:
+      - BACKEND_UPSTREAM=backend:8000
     ports:
       - "3000:80"
     restart: always
