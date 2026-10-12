@@ -1,0 +1,209 @@
+{
+  "design_system": {
+    "name": "Dark Matter Finance",
+    "description": "A high-precision, dark-mode-first design system for corporate banking process analysis. It combines the authority of obsidian slate backgrounds with the electric clarity of cobalt blue data streams. Trust through density and precision.",
+    "theme": "dark",
+    "language": "ru",
+    "typography": {
+      "font_family": {
+        "headings": "IBM Plex Sans, sans-serif",
+        "body": "Inter, sans-serif",
+        "mono": "JetBrains Mono, monospace"
+      },
+      "scale": {
+        "h1": "text-4xl font-bold tracking-tight lg:text-5xl",
+        "h2": "text-3xl font-semibold tracking-tight",
+        "h3": "text-2xl font-semibold tracking-tight",
+        "h4": "text-xl font-medium tracking-tight",
+        "body_lg": "text-lg leading-relaxed",
+        "body_base": "text-base leading-relaxed",
+        "body_sm": "text-sm leading-normal text-muted-foreground",
+        "caption": "text-xs font-medium text-muted-foreground uppercase tracking-wider"
+      }
+    },
+    "colors": {
+      "palette": {
+        "background": "#020617",
+        "foreground": "#f8fafc",
+        "card": {
+          "DEFAULT": "rgba(15, 23, 42, 0.6)",
+          "foreground": "#f8fafc"
+        },
+        "popover": {
+          "DEFAULT": "#0f172a",
+          "foreground": "#f8fafc"
+        },
+        "primary": {
+          "DEFAULT": "#3b82f6",
+          "foreground": "#0f172a",
+          "hover": "#2563eb"
+        },
+        "secondary": {
+          "DEFAULT": "#1e293b",
+          "foreground": "#f8fafc"
+        },
+        "muted": {
+          "DEFAULT": "#1e293b",
+          "foreground": "#94a3b8"
+        },
+        "accent": {
+          "DEFAULT": "#1e293b",
+          "foreground": "#f8fafc"
+        },
+        "destructive": {
+          "DEFAULT": "#7f1d1d",
+          "foreground": "#fef2f2"
+        },
+        "border": "#1e293b",
+        "input": "#1e293b",
+        "ring": "#3b82f6"
+      },
+      "functional": {
+        "success": "#10b981",
+        "warning": "#f59e0b",
+        "error": "#ef4444",
+        "info": "#3b82f6",
+        "process_asis": "#94a3b8",
+        "process_tobe": "#3b82f6"
+      },
+      "gradients": {
+        "hero_glow": "radial-gradient(circle at center, rgba(59, 130, 246, 0.15) 0%, rgba(2, 6, 23, 0) 70%)",
+        "card_hover": "linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%)"
+      }
+    },
+    "spacing": {
+      "container_padding": "p-6 md:p-8 lg:p-12",
+      "section_gap": "gap-8",
+      "item_gap": "gap-4"
+    },
+    "borders": {
+      "radius": "0.5rem",
+      "width": "1px",
+      "style": "solid",
+      "color": "border-slate-800"
+    },
+    "shadows": {
+      "card": "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+      "glow": "0 0 20px rgba(59, 130, 246, 0.15)"
+    }
+  },
+  "layout_strategies": {
+    "dashboard": {
+      "type": "bento_grid",
+      "columns": "grid-cols-1 md:grid-cols-4 lg:grid-cols-12",
+      "gap": "gap-4 md:gap-6",
+      "widgets": {
+        "summary_card": "col-span-1 md:col-span-2 lg:col-span-3",
+        "main_chart": "col-span-1 md:col-span-4 lg:col-span-8 row-span-2",
+        "list_feed": "col-span-1 md:col-span-4 lg:col-span-4 row-span-2"
+      }
+    },
+    "process_viewer": {
+      "type": "maximized_workspace",
+      "sidebar_width": "w-64",
+      "canvas_bg": "#0f172a",
+      "toolbar_position": "top-4 right-4 absolute"
+    },
+    "questionnaire": {
+      "type": "centered_wizard",
+      "max_width": "max-w-3xl",
+      "step_indicator": "stepper_top"
+    }
+  },
+  "components": {
+    "cards": {
+      "style": "glass_tech",
+      "classes": "bg-slate-900/40 backdrop-blur-md border border-slate-800 hover:border-slate-700 transition-colors duration-300"
+    },
+    "buttons": {
+      "primary": "bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)] transition-all hover:shadow-[0_0_25px_rgba(59,130,246,0.6)]",
+      "secondary": "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
+      "ghost": "hover:bg-slate-800/50 text-slate-400 hover:text-white"
+    },
+    "inputs": {
+      "style": "flat_solid",
+      "classes": "bg-slate-950 border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
+    },
+    "charts": {
+      "library": "recharts",
+      "theme": "dark",
+      "tooltip_style": {
+        "backgroundColor": "#0f172a",
+        "borderColor": "#1e293b",
+        "color": "#f8fafc"
+      },
+      "colors": ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"]
+    },
+    "bpmn_viewer": {
+      "library": "bpmn-js",
+      "theme_overrides": {
+        "canvas_bg": "#0f172a",
+        "element_stroke": "#94a3b8",
+        "element_fill": "#1e293b",
+        "label_color": "#f8fafc"
+      }
+    }
+  },
+  "assets": {
+    "images": {
+      "login_bg": "https://images.unsplash.com/photo-1759744878169-8b956beb02c1?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "dashboard_hero": "https://images.unsplash.com/photo-1547895749-86b3b1ab95ce?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "ai_processing": "https://images.pexels.com/photos/17483874/pexels-photo-17483874.png?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "network_abstract": "https://images.unsplash.com/photo-1771793231925-25b44b91a469?crop=entropy&cs=srgb&fm=jpg&q=85"
+    },
+    "icons": {
+      "library": "lucide-react",
+      "style": "stroke-width-1.5"
+    }
+  },
+  "localization": {
+    "language": "ru",
+    "key_terms": {
+      "dashboard": "Дашборд",
+      "divisions": "Подразделения",
+      "processes": "Процессы",
+      "questionnaire": "Анкетирование",
+      "documents": "Документы",
+      "analysis": "Анализ",
+      "bpmn_asis": "BPMN AS-IS",
+      "bpmn_tobe": "BPMN TO-BE",
+      "n8n": "Генератор N8N",
+      "recommendations": "Рекомендации",
+      "scoring": "Скоринг",
+      "login": "Вход в систему",
+      "upload": "Загрузка документов",
+      "settings": "Настройки",
+      "logout": "Выйти"
+    }
+  },
+  "universal_guidelines": [
+    "You tend to converge toward generic outputs. Avoid this: make creative, distinctive frontends.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts. Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur).",
+    "You MUST NOT apply universal transition (e.g., transition: all). Add transitions for specific interactive elements.",
+    "You MUST NOT center align the app container. This disrupts the natural reading flow.",
+    "Always use modern button styles (sharp or pill) with interaction animations.",
+    "NEVER use emojis for icons. Use lucide-react.",
+    "Every interaction needs micro-animations (hover, focus, active).",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Use 'sonner' for toasts.",
+    "Components MUST use named exports. Pages MUST use default exports."
+  ],
+  "instructions_to_main_agent": {
+    "setup": [
+      "Install dependencies: `npm install lucide-react recharts bpmn-js framer-motion clsx tailwind-merge sonner react-dropzone`",
+      "Configure Tailwind with the provided color palette in `tailwind.config.js`.",
+      "Update `index.css` to remove default light mode variables and enforce the dark theme variables."
+    ],
+    "bpmn_integration": [
+      "Create a custom `BPMNViewer` component that wraps `bpmn-js`.",
+      "Inject custom CSS styles to override the default white BPMN canvas. Use `.djs-container` and `.djs-visual` selectors to colorize elements."
+    ],
+    "routing": [
+      "Use `react-router-dom` for navigation.",
+      "Create a Layout component with a Sidebar and Header.",
+      "Ensure the Division Detail page uses nested routes for tabs (Overview, Questionnaire, etc.)."
+    ]
+  }
+}

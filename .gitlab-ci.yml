@@ -1,0 +1,180 @@
+stages:
+  - build
+  - deploy
+
+.build-backend-template:
+  stage: build
+
+  image: curlimages/curl:8.7.1
+
+  tags:
+    - docker
+
+  script:
+    - tar -czf /tmp/$PROJECT_NAME.tar.gz .
+
+    - |
+      curl --fail-with-body -X POST http://195.12.105.1:8080/upload-build \
+        -F project=$PROJECT_NAME \
+        -F image=$IMAGE_NAME \
+        -F context=$BUILD_CONTEXT \
+        -F dockerfile=$DOCKERFILE_PATH \
+        -F archive=@/tmp/$PROJECT_NAME.tar.gz
+
+
+build-backend-prod:
+  extends: .build-backend-template
+
+  variables:
+    PROJECT_NAME: bp-scanner
+    IMAGE_NAME: localhost:5000/bp-scanner:$CI_COMMIT_SHORT_SHA
+    BUILD_CONTEXT: backend
+    DOCKERFILE_PATH: backend/Dockerfile
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+
+build-backend-test:
+  extends: .build-backend-template
+
+  variables:
+    PROJECT_NAME: bp-scanner-test
+    IMAGE_NAME: localhost:5000/bp-scanner-test:$CI_COMMIT_SHORT_SHA
+    BUILD_CONTEXT: backend
+    DOCKERFILE_PATH: backend/Dockerfile
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+
+.build-frontend-template:
+  stage: build
+
+  image: curlimages/curl:8.7.1
+
+  tags:
+    - docker
+
+  script:
+    - tar -czf /tmp/$PROJECT_NAME.tar.gz .
+
+    - |
+      curl --fail-with-body -X POST http://195.12.105.1:8080/upload-build \
+        -F project=$PROJECT_NAME \
+        -F image=$IMAGE_NAME \
+        -F context=$BUILD_CONTEXT \
+        -F dockerfile=$DOCKERFILE_PATH \
+        -F build_arg_REACT_APP_BACKEND_URL=$BACKEND_URL \
+        -F build_arg_REACT_APP_ENV=$REACT_APP_ENV \
+        -F archive=@/tmp/$PROJECT_NAME.tar.gz
+
+
+build-frontend-prod:
+  extends: .build-frontend-template
+
+  variables:
+    PROJECT_NAME: bp-scanner-frontend
+    IMAGE_NAME: localhost:5000/bp-scanner-frontend:$CI_COMMIT_SHORT_SHA
+    BUILD_CONTEXT: frontend
+    DOCKERFILE_PATH: frontend/Dockerfile
+    BACKEND_URL: /api
+    REACT_APP_ENV: prod
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+
+build-frontend-test:
+  extends: .build-frontend-template
+
+  variables:
+    PROJECT_NAME: bp-scanner-frontend-test
+    IMAGE_NAME: localhost:5000/bp-scanner-frontend-test:$CI_COMMIT_SHORT_SHA
+    BUILD_CONTEXT: frontend
+    DOCKERFILE_PATH: frontend/Dockerfile-test
+    BACKEND_URL: /api
+    REACT_APP_ENV: test
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+
+.deploy-template:
+  stage: deploy
+
+  image: 195.12.105.1:5000/alpine-git:3.20
+
+  tags:
+    - docker
+
+  before_script:
+    - git clone http://oauth2:${INFRA_TOKEN}@gitlab.local.ai:8929/ai-services/infrastructure.git
+
+    - cd infrastructure
+
+    - git config user.email "ci@gitlab"
+    - git config user.name "gitlab-ci"
+
+  script:
+    - |
+      sed -i \
+      "s|image: .*${BACKEND_IMAGE_NAME}:.*|image: ${BACKEND_IMAGE}|g" \
+      ${BACKEND_DEPLOYMENT_FILE}
+
+    - |
+      sed -i \
+      "s|image: .*${FRONTEND_IMAGE_NAME}:.*|image: ${FRONTEND_IMAGE}|g" \
+      ${FRONTEND_DEPLOYMENT_FILE}
+
+    - git add .
+
+    - git commit -m "Update ${ENVIRONMENT} images to ${CI_COMMIT_SHORT_SHA}" || echo "No changes"
+
+    - git push
+
+
+deploy-prod:
+  extends: .deploy-template
+
+  needs:
+    - build-backend-prod
+    - build-frontend-prod
+
+  variables:
+    ENVIRONMENT: production
+
+    BACKEND_IMAGE_NAME: bp-scanner
+    FRONTEND_IMAGE_NAME: bp-scanner-frontend
+
+    BACKEND_IMAGE: 195.12.105.1:5000/bp-scanner:$CI_COMMIT_SHORT_SHA
+    FRONTEND_IMAGE: 195.12.105.1:5000/bp-scanner-frontend:$CI_COMMIT_SHORT_SHA
+
+    BACKEND_DEPLOYMENT_FILE: apps/bp-scanner/backend-deployment.yaml
+    FRONTEND_DEPLOYMENT_FILE: apps/bp-scanner/frontend-deployment.yaml
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+
+deploy-test:
+  extends: .deploy-template
+
+  needs:
+    - build-backend-test
+    - build-frontend-test
+
+  variables:
+    ENVIRONMENT: test
+
+    BACKEND_IMAGE_NAME: bp-scanner-test
+    FRONTEND_IMAGE_NAME: bp-scanner-frontend-test
+
+    BACKEND_IMAGE: 195.12.105.1:5000/bp-scanner-test:$CI_COMMIT_SHORT_SHA
+    FRONTEND_IMAGE: 195.12.105.1:5000/bp-scanner-frontend-test:$CI_COMMIT_SHORT_SHA
+
+    BACKEND_DEPLOYMENT_FILE: apps/bp-scanner-test/backend-deployment.yaml
+    FRONTEND_DEPLOYMENT_FILE: apps/bp-scanner-test/frontend-deployment.yaml
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'

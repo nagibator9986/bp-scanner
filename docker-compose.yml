@@ -1,0 +1,40 @@
+services:
+  # База данных MongoDB
+  mongodb:
+    image: mongo:latest
+    container_name: nurbank_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: always
+
+  # Бэкенд (FastAPI)
+  backend:
+    image: ps_ai_backend:latest  # Используем ваш готовый образ
+    container_name: nurbank_backend
+    depends_on:
+      - mongodb
+    env_file: ./backend/.env
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=nurbank_ai
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_uploads:/app/app/uploads # Хранилище для документов
+    restart: always
+
+  # Фронтенд (React + Nginx)
+  frontend:
+    image: ps_ai_frontend:latest # Используем ваш готовый образ
+    container_name: nurbank_frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: always
+
+volumes:
+  mongo_data:
+  backend_uploads:
