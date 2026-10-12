@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { useApi } from "@/hooks/useApi";
 import api, { downloadFile, errorMessage } from "@/lib/api";
 import { ACCEPTED_FILES } from "@/lib/constants";
-import { formatDateTime, formatNumber, formatSize, formatTokens, plural } from "@/lib/format";
+import { formatDateTime, formatNumber, formatSize, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const FILE_ICONS = {
@@ -41,12 +41,6 @@ function ContextBudget({ divisionId }) {
           <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
             <div className={cn("h-full rounded-full", data.fits ? "bg-emerald-500" : "bg-primary")} style={{ width: `${percent}%` }} />
           </div>
-          <p className="text-xs text-muted-foreground">
-            Документы ≈ {formatTokens(data.documents_tokens)} токенов, под них доступно ≈ {formatTokens(data.budget_tokens)} из окна{" "}
-            {formatNumber(data.context_tokens, 0)} токенов ({data.context_source}).
-            {!data.fits &&
-              ` Длинные документы делятся на части и сжимаются моделью до фактов о процессах (≈ ${data.digest_chunks} ${plural(data.digest_chunks, ["запрос", "запроса", "запросов"])}, результат кэшируется) — так анализ учитывает все документы, а не только их начало.`}
-          </p>
         </div>
       </div>
     </div>

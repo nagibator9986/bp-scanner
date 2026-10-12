@@ -143,13 +143,19 @@ function CategoryChart({ data }) {
   const rows = data.map((item) => ({ ...item, name: CATEGORIES[item.category]?.short || item.label, color: CATEGORIES[item.category]?.color }));
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <BarChart data={rows} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+      <BarChart data={rows} margin={{ top: 8, right: 0, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} vertical={false} />
         <XAxis dataKey="name" stroke={chart.axis} fontSize={10} interval={0} />
-        <YAxis yAxisId="count" stroke={chart.axis} fontSize={11} allowDecimals={false} />
-        <YAxis yAxisId="fte" orientation="right" stroke={chart.axis} fontSize={11} />
+        <YAxis yAxisId="count" stroke={chart.axis} fontSize={11} allowDecimals={false} width={28} />
+        <YAxis yAxisId="fte" orientation="right" stroke={chart.axis} fontSize={11} width={28} />
         <Tooltip cursor={{ fill: chart.cursor }} content={<ChartTooltip />} />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Legend
+          wrapperStyle={{ fontSize: 11 }}
+          payload={[
+            { value: "Рекомендаций", type: "square", color: "#3b82f6" },
+            { value: "Экономия, FTE", type: "square", color: chart.muted },
+          ]}
+        />
         <Bar yAxisId="count" dataKey="count" name="Рекомендаций" radius={[4, 4, 0, 0]}>
           {rows.map((row) => (
             <Cell key={row.category} fill={row.color} />
