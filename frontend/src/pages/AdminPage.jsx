@@ -1,208 +1,235 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, AlertTriangle, FileCode, BookOpen, Users, BarChart3, Loader2, Building2 } from "lucide-react";
-import { toast } from "sonner";
-import api from "@/lib/api";
-import { ErrorLogsTab } from "@/components/admin/ErrorLogsTab";
-import { PromptsTab } from "@/components/admin/PromptsTab";
-import { KnowledgeTab } from "@/components/admin/KnowledgeTab";
+import { useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
+import { AlertTriangle, BookOpen, Bot, Building2, CheckCircle2, FileCode, FileText, RefreshCw, Users } from "lucide-react";
+
 import { DivisionsDataTab } from "@/components/admin/DivisionsDataTab";
+import { ErrorLogsTab } from "@/components/admin/ErrorLogsTab";
+import { KnowledgeTab } from "@/components/admin/KnowledgeTab";
+import { PromptsTab } from "@/components/admin/PromptsTab";
+import { UsersTab } from "@/components/admin/UsersTab";
+import { ErrorState, PageHeader, Panel, StatCard } from "@/components/common";
+import { LlmSettingsForm } from "@/components/LlmSettings";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useApi } from "@/hooks/useApi";
+import { cn } from "@/lib/utils";
 
-export default function AdminPage() {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [stats, setStats] = useState(null);
-  const [tab, setTab] = useState("overview");
+const TABS = [
+  { value: "errors", label: "Ошибки", icon: AlertTriangle },
+  { value: "prompts", label: "Промпты", icon: FileCode },
+  { value: "knowledge", label: "База знаний", icon: BookOpen },
+  { value: "users", label: "Пользователи", icon: Users },
+  { value: "divisions", label: "Подразделения", icon: Building2 },
+  { value: "llm", label: "AI-модель", icon: Bot },
+];
+const DEFAULT_TAB = TABS[0].value;
 
-  useEffect(() => {
-    checkAdminAccess();
-  }, []);
-
-  const checkAdminAccess = async () => {
-    try {
-      const { data } = await api.get("/auth/check-admin");
-      if (!data.is_admin) {
-        toast.error("Доступ запрещён. Требуются права администратора.");
-        navigate("/dashboard");
-        return;
-      }
-      setIsAdmin(true);
-      loadStats();
-    } catch (err) {
-      toast.error("Ошибка проверки доступа");
-      navigate("/dashboard");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadStats = async () => {
-    try {
-      const { data } = await api.get("/admin/stats");
-      setStats(data);
-    } catch (err) {
-      console.error("Failed to load stats:", err);
-    }
-  };
-
-  if (loading) {
+function KpiRow({ stats, loading, error, onRetry, onSelectTab }) {
+  if (loading && !stats) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" data-testid="admin-kpi-loading">
+        {Array.from({ length: 6 }, (_, index) => (
+          <Skeleton key={index} className="h-[92px] rounded-xl" />
+        ))}
       </div>
     );
   }
+  if (error && !stats) {
+    return <ErrorState className="py-8" message={error} onRetry={onRetry} />;
+  }
+  if (!stats) return null;
 
-  if (!isAdmin) return null;
-
-  const tabs = [
-    { value: "overview", icon: BarChart3, label: "Обзор" },
-    { value: "divisions", icon: Building2, label: "Подразделения", badge: stats?.divisions },
-    { value: "errors", icon: AlertTriangle, label: "Ошибки", badge: stats?.unresolved_errors },
-    { value: "prompts", icon: FileCode, label: "Промпты" },
-    { value: "knowledge", icon: BookOpen, label: "База знаний", badge: stats?.knowledge_items },
+  const unresolved = stats.unresolved_errors || 0;
+  const cards = [
+    { key: "users", tab: "users", icon: Users, label: "Пользователи", value: stats.users },
+    { key: "divisions", tab: "divisions", icon: Building2, label: "Подразделения", value: stats.divisions },
+    {
+      key: "completed",
+      tab: "divisions",
+      icon: CheckCircle2,
+      label: "Анализов завершено",
+      value: stats.completed_analyses,
+      accent: "text-emerald-500",
+    },
+    {
+      key: "errors",
+      tab: "errors",
+      icon: AlertTriangle,
+      label: "Нерешённых ошибок",
+      value: unresolved,
+      accent: unresolved > 0 ? "text-red-500" : "text-emerald-500",
+      hint: unresolved > 0 ? "требуют внимания" : "всё в порядке",
+    },
+    {
+      key: "knowledge",
+      tab: "knowledge",
+      icon: BookOpen,
+      label: "База знаний",
+      value: stats.knowledge_items,
+      hint: "активных материалов",
+    },
+    { key: "documents", tab: "divisions", icon: FileText, label: "Документы", value: stats.documents, hint: "загружено в подразделения" },
   ];
 
   return (
-    <div className="p-6 md:p-8 lg:p-10 space-y-6" data-testid="admin-page">
-      <div className="flex items-center gap-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => navigate("/dashboard")}
-          className="text-slate-400 hover:text-white"
-          data-testid="admin-back-btn"
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      {cards.map((card) => (
+        <button
+          key={card.key}
+          type="button"
+          onClick={() => onSelectTab(card.tab)}
+          className="rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-testid={`admin-kpi-${card.key}`}
         >
-          <ArrowLeft className="w-5 h-5" />
-        </Button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold text-white tracking-tight">Панель администратора</h1>
-          <p className="text-sm text-slate-400">Управление системой, промптами и базой знаний</p>
+          <StatCard
+            icon={card.icon}
+            label={card.label}
+            value={card.value ?? 0}
+            hint={card.hint}
+            accent={card.accent}
+            className="h-full"
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export default function AdminPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const tab = TABS.some((t) => t.value === requestedTab) ? requestedTab : DEFAULT_TAB;
+
+  const setTab = useCallback(
+    (value) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("tab", value);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
+  const { data: stats, error: statsError, loading: statsLoading, reload: reloadStats } = useApi("/admin/stats");
+  // Тихое обновление KPI после действий во вкладках (без мигания скелетона)
+  const refreshStats = useCallback(() => reloadStats({ silent: true }), [reloadStats]);
+
+  const llmConfigured = stats?.llm_configured;
+
+  return (
+    <div className="p-6 md:p-8 lg:p-10 space-y-6" data-testid="admin-page">
+      <PageHeader
+        title="Панель администратора"
+        description="Журнал ошибок, промпты, база знаний, пользователи и подключение AI-модели"
+        actions={
+          <>
+            {stats && (
+              <button
+                type="button"
+                onClick={() => setTab("llm")}
+                className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-card/70 px-3 py-1.5 text-sm transition-colors hover:border-primary/40"
+                title="Настройки AI-модели"
+                data-testid="admin-llm-chip"
+              >
+                <span className={cn("h-2 w-2 shrink-0 rounded-full", llmConfigured ? "bg-emerald-500" : "bg-amber-500")} />
+                <span className="text-muted-foreground">AI-модель:</span>
+                <span className="max-w-[220px] truncate font-medium text-foreground">
+                  {llmConfigured ? stats.llm_model || "настроена" : "не настроена"}
+                </span>
+              </button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => reloadStats()}
+              disabled={statsLoading}
+              data-testid="admin-refresh-stats-btn"
+            >
+              <RefreshCw className={cn(statsLoading && "animate-spin")} />
+              Обновить
+            </Button>
+          </>
+        }
+      />
+
+      <KpiRow stats={stats} loading={statsLoading} error={statsError} onRetry={reloadStats} onSelectTab={setTab} />
+
+      {stats && !llmConfigured && (
+        <div
+          className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 sm:flex-row sm:items-center sm:justify-between"
+          data-testid="llm-not-configured-banner"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+            <div>
+              <p className="font-medium text-foreground">AI-модель не настроена</p>
+              <p className="text-sm text-muted-foreground">
+                Пока не указано подключение к модели, анализ подразделений и тестирование промптов работать не будут.
+              </p>
+            </div>
+          </div>
+          {tab !== "llm" && (
+            <Button size="sm" onClick={() => setTab("llm")} className="shrink-0" data-testid="configure-llm-btn">
+              <Bot /> Настроить модель
+            </Button>
+          )}
         </div>
-      </div>
+      )}
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className="bg-slate-900/60 border border-slate-800 p-1 h-auto flex-wrap" data-testid="admin-tabs">
-          {tabs.map((t) => (
-            <TabsTrigger
-              key={t.value}
-              value={t.value}
-              className="data-[state=active]:bg-blue-600/15 data-[state=active]:text-blue-400 data-[state=active]:border data-[state=active]:border-blue-500/20 text-slate-400 gap-2 text-sm px-4 py-2 relative"
-              data-testid={`admin-tab-${t.value}`}
-            >
-              <t.icon className="w-4 h-4" strokeWidth={1.5} />
-              <span className="hidden sm:inline">{t.label}</span>
-              {t.badge > 0 && (
-                <Badge variant="destructive" className="ml-1 h-5 px-1.5 text-xs">
-                  {t.badge}
-                </Badge>
-              )}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <TabsList
+            className="h-auto w-max justify-start gap-1 border border-border bg-secondary/50 p-1 sm:w-auto sm:flex-wrap"
+            data-testid="admin-tabs"
+          >
+            {TABS.map(({ value, label, icon: Icon }) => (
+              <TabsTrigger key={value} value={value} className="gap-2 px-3 py-1.5" data-testid={`admin-tab-${value}`}>
+                <Icon className="h-4 w-4" strokeWidth={1.75} />
+                {label}
+                {value === "errors" && stats?.unresolved_errors > 0 && (
+                  <span className="rounded-full bg-red-500/15 px-1.5 text-[10px] font-semibold tabular-nums text-red-500">
+                    {stats.unresolved_errors}
+                  </span>
+                )}
+                {value === "llm" && stats && !llmConfigured && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-label="не настроена" />
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
-        <TabsContent value="overview">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="glass-card border-slate-800">
-              <CardHeader className="pb-2">
-                <CardDescription className="text-slate-500">Пользователи</CardDescription>
-                <CardTitle className="text-3xl text-white">{stats?.users || 0}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card className="glass-card border-slate-800">
-              <CardHeader className="pb-2">
-                <CardDescription className="text-slate-500">Подразделения</CardDescription>
-                <CardTitle className="text-3xl text-white">{stats?.divisions || 0}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card className="glass-card border-slate-800">
-              <CardHeader className="pb-2">
-                <CardDescription className="text-slate-500">Завершённых анализов</CardDescription>
-                <CardTitle className="text-3xl text-emerald-400">{stats?.completed_analyses || 0}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card className="glass-card border-slate-800">
-              <CardHeader className="pb-2">
-                <CardDescription className="text-slate-500">Нерешённых ошибок</CardDescription>
-                <CardTitle className="text-3xl text-red-400">{stats?.unresolved_errors || 0}</CardTitle>
-              </CardHeader>
-            </Card>
-          </div>
-          
-          <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card className="glass-card border-slate-800">
-              <CardHeader>
-                <CardTitle className="text-lg text-white">Быстрые действия</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <Button 
-                  variant="outline" 
-                  className="w-full justify-start text-slate-300 border-slate-700 hover:bg-slate-800"
-                  onClick={() => setTab("errors")}
-                >
-                  <AlertTriangle className="w-4 h-4 mr-2 text-red-400" />
-                  Просмотреть ошибки ({stats?.unresolved_errors || 0})
-                </Button>
-                <Button 
-                  variant="outline" 
-                  className="w-full justify-start text-slate-300 border-slate-700 hover:bg-slate-800"
-                  onClick={() => setTab("prompts")}
-                >
-                  <FileCode className="w-4 h-4 mr-2 text-blue-400" />
-                  Настроить промпты
-                </Button>
-                <Button 
-                  variant="outline" 
-                  className="w-full justify-start text-slate-300 border-slate-700 hover:bg-slate-800"
-                  onClick={() => setTab("knowledge")}
-                >
-                  <BookOpen className="w-4 h-4 mr-2 text-emerald-400" />
-                  Управление базой знаний ({stats?.knowledge_items || 0})
-                </Button>
-              </CardContent>
-            </Card>
-            
-            <Card className="glass-card border-slate-800">
-              <CardHeader>
-                <CardTitle className="text-lg text-white">Информация о системе</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Версия</span>
-                  <span className="text-slate-300">1.0.0</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">AI Модель</span>
-                  <span className="text-slate-300">GPT-5.2</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Элементов в базе знаний</span>
-                  <span className="text-slate-300">{stats?.knowledge_items || 0}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+        <TabsContent value="errors" className="mt-0">
+          <ErrorLogsTab onChanged={refreshStats} />
         </TabsContent>
-
-        <TabsContent value="divisions">
-          <DivisionsDataTab />
-        </TabsContent>
-
-        <TabsContent value="errors">
-          <ErrorLogsTab />
-        </TabsContent>
-
-        <TabsContent value="prompts">
+        <TabsContent value="prompts" className="mt-0">
           <PromptsTab />
         </TabsContent>
-
-        <TabsContent value="knowledge">
-          <KnowledgeTab />
+        <TabsContent value="knowledge" className="mt-0">
+          <KnowledgeTab onChanged={refreshStats} />
+        </TabsContent>
+        <TabsContent value="users" className="mt-0">
+          <UsersTab onChanged={refreshStats} />
+        </TabsContent>
+        <TabsContent value="divisions" className="mt-0">
+          <DivisionsDataTab />
+        </TabsContent>
+        <TabsContent value="llm" className="mt-0">
+          <Panel
+            title="Подключение AI-модели"
+            icon={Bot}
+            description="Модель выполняет все этапы анализа и тестирование промптов. Настройки общие для всех пользователей."
+            data-testid="admin-llm-panel"
+          >
+            <div className="max-w-2xl pt-2">
+              <LlmSettingsForm onSaved={refreshStats} />
+            </div>
+          </Panel>
         </TabsContent>
       </Tabs>
     </div>

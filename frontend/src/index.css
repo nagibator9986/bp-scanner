@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Manrope:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,56 +6,56 @@
   :root, .dark {
     --background: 222 84% 5%;
     --foreground: 210 40% 98%;
-    --card: 222 47% 11%;
+    --card: 222 47% 9%;
     --card-foreground: 210 40% 98%;
     --popover: 222 47% 11%;
     --popover-foreground: 210 40% 98%;
     --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 11%;
+    --primary-foreground: 0 0% 100%;
     --secondary: 217 33% 17%;
     --secondary-foreground: 210 40% 98%;
     --muted: 217 33% 17%;
-    --muted-foreground: 215 16% 65%;
+    --muted-foreground: 215 20% 65%;
     --accent: 217 33% 17%;
     --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 31%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 86% 97%;
     --border: 217 33% 17%;
-    --input: 217 33% 17%;
+    --input: 217 33% 20%;
     --ring: 217 91% 60%;
     --chart-1: 217 91% 60%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
-    --radius: 0.5rem;
+    --chart-2: 160 84% 39%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 271 81% 66%;
+    --chart-5: 346 77% 60%;
+    --radius: 0.6rem;
   }
 
   .light {
-    --background: 0 0% 100%;
-    --foreground: 222 84% 5%;
-    --card: 210 40% 98%;
-    --card-foreground: 222 84% 5%;
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 84% 5%;
-    --primary: 217 91% 55%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 221 83% 53%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96%;
+    --secondary: 210 40% 94%;
     --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 210 40% 96%;
+    --muted: 210 40% 94%;
+    --muted-foreground: 215 16% 42%;
+    --accent: 210 40% 94%;
     --accent-foreground: 222 47% 11%;
-    --destructive: 0 84% 60%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 217 91% 55%;
-    --chart-1: 217 91% 55%;
-    --chart-2: 160 60% 40%;
-    --chart-3: 30 80% 50%;
-    --chart-4: 280 65% 55%;
-    --chart-5: 340 75% 50%;
+    --border: 214 32% 88%;
+    --input: 214 32% 85%;
+    --ring: 221 83% 53%;
+    --chart-1: 221 83% 53%;
+    --chart-2: 160 84% 32%;
+    --chart-3: 32 95% 44%;
+    --chart-4: 271 70% 55%;
+    --chart-5: 346 77% 50%;
   }
 }
 
@@ -67,86 +65,34 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'Manrope', sans-serif;
+    font-family: "Manrope", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
   h1, h2, h3, h4, h5, h6 {
-    font-family: 'IBM Plex Sans', sans-serif;
+    font-family: "IBM Plex Sans", "Manrope", system-ui, sans-serif;
   }
-  code, pre {
-    font-family: 'JetBrains Mono', monospace;
-  }
-}
-
-@layer base {
-  [data-debug-wrapper="true"] {
-    display: contents !important;
-  }
-  [data-debug-wrapper="true"] > * {
-    margin-left: inherit;
-    margin-right: inherit;
-    margin-top: inherit;
-    margin-bottom: inherit;
-    padding-left: inherit;
-    padding-right: inherit;
-    padding-top: inherit;
-    padding-bottom: inherit;
-    column-gap: inherit;
-    row-gap: inherit;
-    gap: inherit;
+  code, pre, .font-mono {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
   }
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: hsl(222 47% 11%);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(217 33% 25%);
-  border-radius: 3px;
+  background: hsl(var(--muted-foreground) / 0.25);
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(217 91% 60%);
+  background: hsl(var(--primary) / 0.7);
 }
 
-.bpmn-container svg text {
-  fill: #1a1a2e !important; /* dark color for labels on white shapes */
-}
-
-.bpmn-container .djs-label {
-  color: #1a1a2e !important;
-}
-
-.bpmn-container .djs-shape .djs-visual > rect,
-.bpmn-container .djs-shape .djs-visual > polygon {
-  fill: hsl(222 47% 11%) !important;
-  stroke: hsl(217 33% 35%) !important;
-}
-
-.bpmn-container .djs-shape .djs-visual text {
-  fill: #e2e8f0 !important;
-}
-
-/* Универсальное переопределение для dark theme */
-.bpmn-container .djs-visual circle {
-  fill: hsl(222 47% 8%) !important;
-  stroke: hsl(217 33% 40%) !important;
-}
-
-.bpmn-container .djs-visual rect {
-  fill: hsl(222 47% 11%) !important;
-  stroke: hsl(217 33% 35%) !important;
-}
-
-.bpmn-container .djs-visual text {
-  fill: #e2e8f0 !important;
-}
-
-/* Стрелки/sequence flows */
-.bpmn-container .djs-connection .djs-visual path {
-  stroke: hsl(217 33% 45%) !important;
+/* bpmn-js: фон холста под тему (логотип bpmn.io оставляем — этого требует лицензия) */
+.bpmn-canvas .djs-container {
+  background-color: transparent;
 }

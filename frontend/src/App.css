@@ -1,127 +1,18 @@
+/* Карточки в стиле «стекло» (используются в админ-панели и старых компонентах) */
 .glass-card {
-  background: rgba(15, 23, 42, 0.6);
-  backdrop-filter: blur(16px);
+  background: hsl(var(--card) / 0.7);
+  backdrop-filter: blur(12px);
   border: 1px solid hsl(var(--border));
-  transition: border-color 0.3s ease, background 0.3s ease;
-}
-.light .glass-card {
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  transition: border-color 0.2s ease;
 }
 .glass-card:hover {
-  border-color: hsl(var(--muted-foreground) / 0.3);
-}
-
-.light .glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.1); }
-.light .glow-blue-strong { box-shadow: 0 0 30px rgba(59, 130, 246, 0.15); }
-.light .stat-card::before { background: linear-gradient(90deg, transparent, hsl(217 91% 55%), transparent); }
-
-.light .bg-slate-950, .light .bg-\[#020617\] { background-color: hsl(var(--background)); }
-.light .bg-slate-900\/40 { background-color: hsl(var(--secondary)); }
-.light .bg-slate-900\/60 { background-color: hsl(var(--secondary)); }
-.light .bg-slate-800\/30, .light .bg-slate-800\/20, .light .bg-slate-800\/50, .light .bg-slate-800\/60 { background-color: hsl(var(--secondary)); }
-.light .border-slate-800 { border-color: hsl(var(--border)); }
-.light .border-slate-700 { border-color: hsl(var(--border)); }
-.light .text-white { color: hsl(var(--foreground)); }
-.light .text-slate-400, .light .text-slate-500 { color: hsl(var(--muted-foreground)); }
-.light .text-slate-300 { color: hsl(var(--foreground) / 0.8); }
-.light .text-slate-600 { color: hsl(var(--muted-foreground)); }
-.light .hover\:bg-slate-800:hover { background-color: hsl(var(--secondary)); }
-.light .hover\:bg-slate-700:hover { background-color: hsl(var(--secondary)); }
-.light .focus\:border-blue-500:focus { border-color: hsl(var(--primary)); }
-.light .placeholder\:text-slate-600::placeholder { color: hsl(var(--muted-foreground)); }
-
-.glow-blue {
-  box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
-}
-.glow-blue-strong {
-  box-shadow: 0 0 30px rgba(59, 130, 246, 0.3);
-}
-
-.flow-node {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-.flow-node:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
-}
-
-.flow-connector {
-  position: relative;
-}
-.flow-connector::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: -24px;
-  width: 24px;
-  height: 2px;
-  background: hsl(217 33% 30%);
-}
-.flow-connector::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: -28px;
-  width: 0;
-  height: 0;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-  border-left: 6px solid hsl(217 33% 30%);
-  transform: translateY(-50%);
-}
-
-.n8n-node {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-.n8n-node:hover {
-  transform: scale(1.03);
-}
-
-.stat-card {
-  position: relative;
-  overflow: hidden;
-}
-.stat-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, hsl(217 91% 60%), transparent);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-.stat-card:hover::before {
-  opacity: 1;
+  border-color: hsl(var(--primary) / 0.3);
 }
 
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .animate-fade-in-up {
-  animation: fadeInUp 0.4s ease-out forwards;
-}
-
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 10px rgba(59, 130, 246, 0.2); }
-  50% { box-shadow: 0 0 25px rgba(59, 130, 246, 0.4); }
-}
-.animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
-
-.bpmn-container .djs-container {
-  background: hsl(222 47% 11%) !important;
-}
-.bpmn-container .djs-visual > :not(defs) path,
-.bpmn-container .djs-visual > :not(defs) rect,
-.bpmn-container .djs-visual > :not(defs) circle,
-.bpmn-container .djs-visual > :not(defs) polygon {
-  stroke: #94a3b8 !important;
-}
-.bpmn-container .djs-visual text {
-  fill: #f8fafc !important;
+  animation: fadeInUp 0.3s ease-out both;
 }

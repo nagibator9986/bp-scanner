@@ -1,60 +1,53 @@
-import { useState, useRef, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import { Mic, MicOff, Upload, FileText, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { FileText, Loader2, Mic, MicOff } from "lucide-react";
 import { toast } from "sonner";
-import api from "@/lib/api";
 
-const SpeechRecognition = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+import { Button } from "@/components/ui/button";
+import api, { errorMessage } from "@/lib/api";
+import { ACCEPTED_FILES } from "@/lib/constants";
 
+const SpeechRecognition = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+
+/** Голосовой ввод через Web Speech API (Chrome/Edge). */
 export const AudioInput = ({ onTranscript }) => {
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
+  const callbackRef = useRef(onTranscript);
+  callbackRef.current = onTranscript;
 
-  const toggleRecording = useCallback(() => {
+  // Запись останавливается при уходе со страницы/вопроса — текст не попадёт в чужое поле
+  useEffect(() => () => recognitionRef.current?.abort(), []);
+
+  const toggleRecording = () => {
     if (!SpeechRecognition) {
-      toast.error("Браузер не поддерживает распознавание речи. Используйте Chrome.");
+      toast.error("Браузер не поддерживает распознавание речи. Используйте Chrome или Edge.");
       return;
     }
-
     if (isRecording) {
       recognitionRef.current?.stop();
-      setIsRecording(false);
       return;
     }
-
     const recognition = new SpeechRecognition();
     recognition.lang = "ru-RU";
     recognition.continuous = true;
     recognition.interimResults = false;
-
     recognition.onresult = (event) => {
       let transcript = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          transcript += event.results[i][0].transcript + " ";
-        }
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        if (event.results[i].isFinal) transcript += `${event.results[i][0].transcript} `;
       }
-      if (transcript.trim()) {
-        onTranscript(transcript.trim());
-      }
+      if (transcript.trim()) callbackRef.current(transcript.trim());
     };
-
     recognition.onerror = (event) => {
-      if (event.error !== "aborted") {
-        toast.error("Ошибка распознавания: " + event.error);
+      if (event.error !== "aborted" && event.error !== "no-speech") {
+        toast.error(`Ошибка распознавания: ${event.error}`);
       }
-      setIsRecording(false);
     };
-
-    recognition.onend = () => {
-      setIsRecording(false);
-    };
-
+    recognition.onend = () => setIsRecording(false);
     recognitionRef.current = recognition;
     recognition.start();
     setIsRecording(true);
-    toast.info("Запись начата. Говорите...");
-  }, [isRecording, onTranscript]);
+  };
 
   return (
     <Button
@@ -62,42 +55,36 @@ export const AudioInput = ({ onTranscript }) => {
       variant="ghost"
       size="sm"
       onClick={toggleRecording}
-      className={`h-8 px-2 ${isRecording ? "text-red-400 bg-red-500/10 hover:bg-red-500/20 animate-pulse" : "text-muted-foreground hover:text-foreground"}`}
-      data-testid="audio-input-btn"
+      className={isRecording ? "h-8 animate-pulse bg-red-500/10 px-2 text-red-500 hover:bg-red-500/20" : "h-8 px-2 text-muted-foreground"}
       title={isRecording ? "Остановить запись" : "Голосовой ввод"}
+      data-testid="audio-input-btn"
     >
-      {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+      {isRecording ? <MicOff /> : <Mic />}
+      {isRecording && <span className="text-xs">Запись…</span>}
     </Button>
   );
 };
 
+/** Извлечение текста из документа и вставка в поле ответа. */
 export const DocExtractInput = ({ onTextExtracted }) => {
   const [loading, setLoading] = useState(false);
   const inputRef = useRef(null);
 
   const handleFile = async (file) => {
     if (!file) return;
-    const allowed = [".pdf", ".docx", ".xlsx", ".pptx", ".txt"];
-    const ext = "." + file.name.split(".").pop().toLowerCase();
-    if (!allowed.includes(ext)) {
-      toast.error(`Формат ${ext} не поддерживается`);
-      return;
-    }
     setLoading(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const { data } = await api.post("/extract-text", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const { data } = await api.post("/extract-text", formData);
       if (data.text) {
         onTextExtracted(data.text);
-        toast.success(`Текст извлечён из ${data.filename}`);
+        toast.success(`Текст извлечён из «${data.filename}»`);
       } else {
-        toast.warning("Не удалось извлечь текст из документа");
+        toast.warning("В документе не найден текст");
       }
     } catch (err) {
-      toast.error("Ошибка извлечения текста");
+      toast.error(errorMessage(err, "Ошибка извлечения текста"));
     } finally {
       setLoading(false);
       if (inputRef.current) inputRef.current.value = "";
@@ -106,24 +93,18 @@ export const DocExtractInput = ({ onTextExtracted }) => {
 
   return (
     <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".pdf,.docx,.xlsx,.pptx,.txt"
-        className="hidden"
-        onChange={(e) => handleFile(e.target.files?.[0])}
-      />
+      <input ref={inputRef} type="file" accept={ACCEPTED_FILES} className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
       <Button
         type="button"
         variant="ghost"
         size="sm"
         onClick={() => inputRef.current?.click()}
         disabled={loading}
-        className="h-8 px-2 text-muted-foreground hover:text-foreground"
+        className="h-8 px-2 text-muted-foreground"
+        title="Извлечь текст из документа"
         data-testid="doc-extract-btn"
-        title="Загрузить документ и извлечь текст"
       >
-        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+        {loading ? <Loader2 className="animate-spin" /> : <FileText />}
       </Button>
     </>
   );

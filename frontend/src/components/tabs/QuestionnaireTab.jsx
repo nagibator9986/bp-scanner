@@ -1,242 +1,311 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, ClipboardPaste, CloudOff, Loader2, Save } from "lucide-react";
+import { toast } from "sonner";
+
+import { AudioInput, DocExtractInput } from "@/components/AudioInput";
+import { ErrorState, LoadingState, Meter } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
-import { Save, ChevronRight, ChevronLeft, Check, Loader2, Mic, FileText, ClipboardPaste } from "lucide-react";
-import { toast } from "sonner";
-import api from "@/lib/api";
-import { AudioInput, DocExtractInput } from "@/components/AudioInput";
+import { Textarea } from "@/components/ui/textarea";
+import api, { errorMessage } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
-const InputToolbar = ({ questionId, onAppendText }) => {
-  const handlePaste = async () => {
+const AUTOSAVE_MS = 1500;
+
+const isAnswered = (value) =>
+  value !== undefined && value !== null && (typeof value === "boolean" || String(value).trim() !== "");
+
+const sectionVisible = (section, answers) =>
+  !section.condition || answers[section.condition.question_id] === section.condition.value;
+
+function InputToolbar({ questionId, onAppend }) {
+  const paste = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text) {
-        onAppendText(text);
-        toast.success("Текст вставлен из буфера обмена");
-      }
-    } catch (err) {
-      toast.error("Нет доступа к буферу обмена. Используйте Ctrl+V.");
+      if (text) onAppend(text);
+    } catch {
+      toast.error("Нет доступа к буферу обмена — используйте Ctrl+V");
     }
   };
-
   return (
-    <div className="flex items-center gap-1 mt-1.5 pl-1" data-testid={`toolbar-${questionId}`}>
-      <AudioInput onTranscript={(text) => onAppendText(" " + text)} />
-      <DocExtractInput onTextExtracted={(text) => onAppendText("\n" + text)} />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={handlePaste}
-        className="h-8 px-2 text-muted-foreground hover:text-foreground"
-        title="Вставить из буфера"
-        data-testid={`paste-btn-${questionId}`}
-      >
-        <ClipboardPaste className="w-4 h-4" />
+    <div className="mt-1 flex items-center gap-0.5" data-testid={`toolbar-${questionId}`}>
+      <AudioInput onTranscript={(text) => onAppend(` ${text}`)} />
+      <DocExtractInput onTextExtracted={(text) => onAppend(`\n${text}`)} />
+      <Button type="button" variant="ghost" size="sm" onClick={paste} className="h-8 px-2 text-muted-foreground" title="Вставить из буфера" data-testid={`paste-btn-${questionId}`}>
+        <ClipboardPaste />
       </Button>
-      <span className="text-[10px] text-muted-foreground ml-1">
-        <Mic className="w-3 h-3 inline mr-0.5" />голос
-        <FileText className="w-3 h-3 inline mx-0.5 ml-2" />документ
-        <ClipboardPaste className="w-3 h-3 inline mx-0.5 ml-2" />вставка
-      </span>
+      <span className="ml-1 text-[11px] text-muted-foreground">голос · документ · буфер обмена</span>
     </div>
   );
-};
+}
 
-export const QuestionnaireTab = ({ divisionId }) => {
-  const [schema, setSchema] = useState([]);
+function SaveIndicator({ state, savedAt }) {
+  if (state === "saving") {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Сохранение…
+      </span>
+    );
+  }
+  if (state === "error") {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-red-500">
+        <CloudOff className="h-3.5 w-3.5" /> Не сохранено
+      </span>
+    );
+  }
+  if (state === "dirty") return <span className="text-xs text-amber-500">Есть несохранённые изменения</span>;
+  if (savedAt) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-emerald-500">
+        <Check className="h-3.5 w-3.5" /> Сохранено {savedAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+      </span>
+    );
+  }
+  return null;
+}
+
+export const QuestionnaireTab = ({ divisionId, onSaved }) => {
+  const [schema, setSchema] = useState(null);
   const [answers, setAnswers] = useState({});
+  const [loadError, setLoadError] = useState(null);
   const [step, setStep] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const [savedAt, setSavedAt] = useState(null);
+  const answersRef = useRef(answers);
+  const dirtyRef = useRef(false);
+  const timerRef = useRef(null);
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
 
-  useEffect(() => {
-    Promise.all([
-      api.get("/questionnaire/schema"),
-      api.get(`/divisions/${divisionId}/questionnaire`),
-    ]).then(([schemaRes, answersRes]) => {
-      setSchema(schemaRes.data);
-      setAnswers(answersRes.data?.answers || {});
-    }).catch(console.error).finally(() => setLoading(false));
+  const load = useCallback(() => {
+    setLoadError(null);
+    Promise.all([api.get("/questionnaire/schema"), api.get(`/divisions/${divisionId}/questionnaire`)])
+      .then(([schemaRes, answersRes]) => {
+        setSchema(schemaRes.data);
+        setAnswers(answersRes.data?.answers || {});
+        answersRef.current = answersRes.data?.answers || {};
+        if (answersRes.data?.updated_at) setSavedAt(new Date(answersRes.data.updated_at));
+      })
+      .catch((err) => setLoadError(errorMessage(err, "Не удалось загрузить анкету")));
   }, [divisionId]);
 
-  const visibleSections = schema.filter((section) => {
-    if (!section.condition) return true;
-    const { question_id, value } = section.condition;
-    return answers[question_id] === value;
-  });
+  useEffect(load, [load]);
 
-  const currentSection = visibleSections[step];
+  const save = useCallback(
+    async ({ silent = true } = {}) => {
+      clearTimeout(timerRef.current);
+      if (!dirtyRef.current && silent) return;
+      dirtyRef.current = false;
+      setSaveState("saving");
+      try {
+        const { data } = await api.post(`/divisions/${divisionId}/questionnaire`, { answers: answersRef.current });
+        setSaveState(dirtyRef.current ? "dirty" : "saved");
+        setSavedAt(new Date());
+        onSavedRef.current?.(data.completion);
+        if (!silent) toast.success("Анкета сохранена");
+      } catch (err) {
+        dirtyRef.current = true;
+        setSaveState("error");
+        toast.error(errorMessage(err, "Ошибка сохранения анкеты"));
+      }
+    },
+    [divisionId]
+  );
 
-  const handleAnswer = (qId, value) => {
-    setAnswers((prev) => ({ ...prev, [qId]: value }));
+  // Несохранённые ответы отправляются при уходе с вкладки и предупреждаем при закрытии страницы
+  useEffect(() => {
+    const warn = (event) => {
+      if (dirtyRef.current) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      clearTimeout(timerRef.current);
+      if (dirtyRef.current) {
+        api.post(`/divisions/${divisionId}/questionnaire`, { answers: answersRef.current }).catch(() => {});
+      }
+    };
+  }, [divisionId]);
+
+  const updateAnswers = (updater) => {
+    setAnswers((prev) => {
+      const next = updater(prev);
+      answersRef.current = next;
+      return next;
+    });
+    dirtyRef.current = true;
+    setSaveState("dirty");
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => save(), AUTOSAVE_MS);
   };
 
-  const appendText = (qId, text) => {
-    setAnswers((prev) => ({
-      ...prev,
-      [qId]: ((prev[qId] || "") + text).trim(),
-    }));
-  };
+  const setAnswer = (id, value) => updateAnswers((prev) => ({ ...prev, [id]: value }));
+  const appendText = (id, text) => updateAnswers((prev) => ({ ...prev, [id]: `${prev[id] || ""}${text}`.trim() }));
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      await api.post(`/divisions/${divisionId}/questionnaire`, { answers });
-      toast.success("Анкета сохранена");
-    } catch (err) {
-      toast.error("Ошибка сохранения");
-    } finally {
-      setSaving(false);
-    }
-  };
+  const visibleSections = useMemo(() => (schema || []).filter((s) => sectionVisible(s, answers)), [schema, answers]);
+  const progress = useMemo(() => {
+    const questions = visibleSections.flatMap((s) => s.questions);
+    const required = questions.filter((q) => q.required);
+    return {
+      total: questions.length,
+      done: questions.filter((q) => isAnswered(answers[q.id])).length,
+      required: required.length,
+      requiredDone: required.filter((q) => isAnswered(answers[q.id])).length,
+    };
+  }, [visibleSections, answers]);
 
-  if (loading) {
-    return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 text-blue-500 animate-spin" /></div>;
-  }
+  if (loadError) return <ErrorState message={loadError} onRetry={load} />;
+  if (!schema) return <LoadingState />;
 
-  if (!currentSection) return null;
-
-  const filledCount = Object.keys(answers).filter((k) => answers[k] !== "" && answers[k] !== undefined && answers[k] !== null).length;
-  const totalQuestions = visibleSections.reduce((sum, s) => sum + s.questions.length, 0);
+  const currentIndex = Math.min(step, visibleSections.length - 1);
+  const section = visibleSections[currentIndex];
+  if (!section) return null;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6" data-testid="questionnaire-tab">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-4xl space-y-5" data-testid="questionnaire-tab">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-foreground">Анкетирование подразделения</h2>
-          <p className="text-sm text-muted-foreground mt-1">Заполняйте текстом, голосом или из документа</p>
+          <h2 className="text-xl font-semibold text-foreground">Анкета подразделения</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Ответы сохраняются автоматически. Можно диктовать голосом или извлекать текст из документов.</p>
         </div>
-        <Badge variant="outline" className="border-border text-muted-foreground">
-          {filledCount}/{totalQuestions} ответов
-        </Badge>
+        <SaveIndicator state={saveState} savedAt={savedAt} />
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-2">
-        {visibleSections.map((s, i) => (
-          <button
-            key={s.id}
-            onClick={() => setStep(i)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors border ${
-              i === step
-                ? "bg-blue-600/15 text-blue-500 border-blue-500/20"
-                : i < step
-                ? "bg-emerald-600/10 text-emerald-500 border-emerald-500/20"
-                : "bg-secondary/40 text-muted-foreground border-border"
-            }`}
-            data-testid={`step-${s.id}`}
-          >
-            {i < step ? <Check className="w-3.5 h-3.5" /> : <span className="w-5 h-5 rounded-full bg-secondary flex items-center justify-center text-xs">{i + 1}</span>}
-            {s.title}
-          </button>
-        ))}
+      <div className="rounded-xl border border-border bg-card/70 p-4">
+        <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            Заполнено {progress.done} из {progress.total} вопросов
+          </span>
+          <span className={progress.requiredDone === progress.required ? "text-emerald-500" : ""}>
+            Обязательных: {progress.requiredDone} / {progress.required}
+          </span>
+        </div>
+        <Meter value={progress.done} max={progress.total || 1} />
       </div>
 
-      <div className="glass-card rounded-xl p-6 space-y-6 animate-fade-in-up">
-        <h3 className="text-lg font-semibold text-foreground">{currentSection.title}</h3>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {visibleSections.map((item, index) => {
+          const done = item.questions.filter((q) => isAnswered(answers[q.id])).length;
+          const complete = item.questions.filter((q) => q.required).every((q) => isAnswered(answers[q.id])) && done > 0;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setStep(index)}
+              className={cn(
+                "flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                index === currentIndex
+                  ? "border-primary/30 bg-primary/10 text-primary"
+                  : complete
+                  ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+              data-testid={`step-${item.id}`}
+            >
+              {complete && index !== currentIndex ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-secondary text-xs">{index + 1}</span>
+              )}
+              {item.title}
+              <span className="text-xs opacity-70">
+                {done}/{item.questions.length}
+              </span>
+            </button>
+          );
+        })}
+      </div>
 
-        {currentSection.questions.map((q) => (
-          <div key={q.id} className="space-y-1" data-testid={`question-${q.id}`}>
-            <Label className="text-muted-foreground text-sm">
-              {q.text}
-              {q.required && <span className="text-red-400 ml-1">*</span>}
+      <div className="space-y-6 rounded-xl border border-border bg-card/70 p-6">
+        <h3 className="text-lg font-semibold text-foreground">{section.title}</h3>
+        {section.questions.map((question) => (
+          <div key={question.id} className="space-y-1.5" data-testid={`question-${question.id}`}>
+            <Label htmlFor={question.id} className="text-sm text-foreground">
+              {question.text}
+              {question.required && <span className="ml-1 text-red-500">*</span>}
             </Label>
 
-            {q.type === "textarea" && (
+            {(question.type === "textarea" || question.type === "text") && (
               <>
-                <Textarea
-                  value={answers[q.id] || ""}
-                  onChange={(e) => handleAnswer(q.id, e.target.value)}
-                  placeholder={q.placeholder || ""}
-                  className="bg-background border-input focus:border-blue-500 focus:ring-1 focus:ring-blue-500 placeholder:text-muted-foreground/50 min-h-[100px]"
-                />
-                <InputToolbar questionId={q.id} onAppendText={(text) => appendText(q.id, text)} />
+                {question.type === "textarea" ? (
+                  <Textarea
+                    id={question.id}
+                    value={answers[question.id] || ""}
+                    onChange={(e) => setAnswer(question.id, e.target.value)}
+                    onBlur={() => save()}
+                    placeholder={question.placeholder || ""}
+                    className="min-h-[110px]"
+                  />
+                ) : (
+                  <Input
+                    id={question.id}
+                    value={answers[question.id] || ""}
+                    onChange={(e) => setAnswer(question.id, e.target.value)}
+                    onBlur={() => save()}
+                    placeholder={question.placeholder || ""}
+                  />
+                )}
+                <InputToolbar questionId={question.id} onAppend={(text) => appendText(question.id, text)} />
               </>
             )}
 
-            {q.type === "text" && (
-              <>
-                <Input
-                  value={answers[q.id] || ""}
-                  onChange={(e) => handleAnswer(q.id, e.target.value)}
-                  placeholder={q.placeholder || ""}
-                  className="bg-background border-input focus:border-blue-500 placeholder:text-muted-foreground/50"
-                />
-                <InputToolbar questionId={q.id} onAppendText={(text) => appendText(q.id, text)} />
-              </>
-            )}
-
-            {q.type === "number" && (
+            {question.type === "number" && (
               <Input
+                id={question.id}
                 type="number"
-                value={answers[q.id] || ""}
-                onChange={(e) => handleAnswer(q.id, parseInt(e.target.value) || 0)}
-                className="bg-background border-input focus:border-blue-500"
+                value={answers[question.id] ?? ""}
+                onChange={(e) => setAnswer(question.id, e.target.value === "" ? null : Number(e.target.value))}
               />
             )}
 
-            {q.type === "select" && (
-              <Select value={answers[q.id] || ""} onValueChange={(val) => handleAnswer(q.id, val)}>
-                <SelectTrigger className="bg-background border-input focus:border-blue-500 text-foreground">
-                  <SelectValue placeholder="Выберите..." />
+            {question.type === "select" && (
+              <Select value={answers[question.id] || ""} onValueChange={(value) => setAnswer(question.id, value)}>
+                <SelectTrigger id={question.id}>
+                  <SelectValue placeholder="Выберите…" />
                 </SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {(q.options || []).map((opt) => (
-                    <SelectItem key={opt} value={opt} className="text-foreground hover:bg-secondary focus:bg-secondary">
-                      {opt}
+                <SelectContent>
+                  {(question.options || []).map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             )}
 
-            {q.type === "boolean" && (
+            {question.type === "boolean" && (
               <div className="flex items-center gap-3">
-                <Switch
-                  checked={answers[q.id] || false}
-                  onCheckedChange={(val) => handleAnswer(q.id, val)}
-                  className="data-[state=checked]:bg-blue-600"
-                />
-                <span className="text-sm text-muted-foreground">{answers[q.id] ? "Да" : "Нет"}</span>
+                <Switch id={question.id} checked={answers[question.id] === true} onCheckedChange={(value) => setAnswer(question.id, value)} />
+                <span className="text-sm text-muted-foreground">{answers[question.id] === true ? "Да" : "Нет"}</span>
               </div>
             )}
           </div>
         ))}
       </div>
 
-      <div className="flex items-center justify-between">
-        <Button
-          variant="outline"
-          onClick={() => setStep(Math.max(0, step - 1))}
-          disabled={step === 0}
-          className="border-border text-foreground hover:bg-secondary"
-          data-testid="prev-step-btn"
-        >
-          <ChevronLeft className="w-4 h-4 mr-1" /> Назад
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="outline" onClick={() => setStep(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} data-testid="prev-step-btn">
+          <ChevronLeft /> Назад
         </Button>
-
-        <Button
-          onClick={save}
-          disabled={saving}
-          className="bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(59,130,246,0.3)]"
-          data-testid="save-questionnaire-btn"
-        >
-          {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-          Сохранить
+        <Button variant="secondary" onClick={() => save({ silent: false })} disabled={saveState === "saving"} data-testid="save-questionnaire-btn">
+          {saveState === "saving" ? <Loader2 className="animate-spin" /> : <Save />} Сохранить
         </Button>
-
         <Button
-          onClick={() => setStep(Math.min(visibleSections.length - 1, step + 1))}
-          disabled={step >= visibleSections.length - 1}
-          className="bg-secondary hover:bg-secondary/80 text-foreground border border-border"
+          onClick={() => {
+            save();
+            setStep(Math.min(visibleSections.length - 1, currentIndex + 1));
+          }}
+          disabled={currentIndex >= visibleSections.length - 1}
           data-testid="next-step-btn"
         >
-          Далее <ChevronRight className="w-4 h-4 ml-1" />
+          Далее <ChevronRight />
         </Button>
       </div>
     </div>

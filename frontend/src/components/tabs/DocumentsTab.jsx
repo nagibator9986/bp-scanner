@@ -1,158 +1,226 @@
-import { useState, useEffect, useRef } from "react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Upload, FileText, Trash2, Loader2, File, FileSpreadsheet, Presentation } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, ChevronDown, Download, File, FileSpreadsheet, FileText, Presentation, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
-import api from "@/lib/api";
+
+import { ConfirmDialog, EmptyState, ErrorState, LoadingState } from "@/components/common";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { useApi } from "@/hooks/useApi";
+import api, { downloadFile, errorMessage } from "@/lib/api";
+import { ACCEPTED_FILES } from "@/lib/constants";
+import { formatDateTime, formatNumber, formatSize, plural } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 const FILE_ICONS = {
   ".pdf": FileText,
   ".docx": File,
   ".xlsx": FileSpreadsheet,
+  ".csv": FileSpreadsheet,
   ".pptx": Presentation,
-  ".txt": FileText,
 };
+const ALLOWED = ACCEPTED_FILES.split(",");
 
-const formatSize = (bytes) => {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / 1048576).toFixed(1) + " MB";
-};
+function DocumentRow({ doc, index, onDelete, divisionId }) {
+  const [open, setOpen] = useState(false);
+  const Icon = FILE_ICONS[doc.file_type] || FileText;
+  const noText = doc.text_length === 0;
 
-export const DocumentsTab = ({ divisionId }) => {
-  const [docs, setDocs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const inputRef = useRef(null);
-
-  const load = () => {
-    api.get(`/divisions/${divisionId}/documents`).then((r) => setDocs(r.data)).catch(console.error).finally(() => setLoading(false));
+  const download = async () => {
+    try {
+      await downloadFile(`/divisions/${divisionId}/documents/${doc.id}/download`, doc.filename);
+    } catch (err) {
+      toast.error(errorMessage(err, "Не удалось скачать файл"));
+    }
   };
 
-  useEffect(() => { load(); }, [divisionId]);
+  return (
+    <div className="rounded-lg border border-border bg-card/70 transition-colors hover:border-primary/30" data-testid={`doc-item-${index}`}>
+      <div className="flex items-center gap-3 p-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+          <Icon className="h-5 w-5 text-primary" />
+        </div>
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen((v) => !v)}>
+          <p className="truncate text-sm font-medium text-foreground">{doc.filename}</p>
+          <p className="text-xs text-muted-foreground">
+            {formatSize(doc.file_size)} · {formatDateTime(doc.uploaded_at)}
+            {doc.text_length != null && !noText && ` · ${formatNumber(doc.text_length, 0)} символов текста`}
+          </p>
+        </button>
+        {noText && (
+          <span className="hidden items-center gap-1 text-xs text-amber-500 sm:flex" title="Модель не увидит содержимое: возможно, это скан без текстового слоя">
+            <AlertTriangle className="h-3.5 w-3.5" /> нет текста
+          </span>
+        )}
+        {doc.text_preview && (
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setOpen((v) => !v)} aria-label="Предпросмотр">
+            <ChevronDown className={cn("transition-transform", open && "rotate-180")} />
+          </Button>
+        )}
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={download} aria-label="Скачать">
+          <Download />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-red-500"
+          onClick={() => onDelete(doc)}
+          aria-label="Удалить"
+          data-testid={`delete-doc-${index}`}
+        >
+          <Trash2 />
+        </Button>
+      </div>
+      {open && doc.text_preview && (
+        <pre className="mx-3 mb-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-secondary/50 p-3 text-xs text-muted-foreground">
+          {doc.text_preview}
+          {doc.text_length > doc.text_preview.length && "…"}
+        </pre>
+      )}
+    </div>
+  );
+}
 
-  const uploadFiles = async (files) => {
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    let success = 0;
-    for (const file of files) {
-      const allowed = [".pdf", ".docx", ".xlsx", ".pptx", ".txt"];
-      const ext = "." + file.name.split(".").pop().toLowerCase();
-      if (!allowed.includes(ext)) {
-        toast.error(`Формат ${ext} не поддерживается`);
+export const DocumentsTab = ({ divisionId, onChange }) => {
+  const { data: docs, error, loading, reload, setData } = useApi(`/divisions/${divisionId}/documents`, { initial: [] });
+  const [uploads, setUploads] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (!loading && !error) onChangeRef.current?.(docs.length);
+  }, [docs, loading, error]);
+
+  const uploadFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const queue = files.map((file, i) => ({ id: `${Date.now()}-${i}`, name: file.name, progress: 0, file }));
+    setUploads((prev) => [...prev, ...queue]);
+    let uploaded = 0;
+    for (const item of queue) {
+      const extension = `.${item.name.split(".").pop().toLowerCase()}`;
+      if (!ALLOWED.includes(extension)) {
+        toast.error(`«${item.name}»: формат ${extension} не поддерживается`);
+        setUploads((prev) => prev.filter((u) => u.id !== item.id));
         continue;
       }
       try {
-        const formData = new FormData();
-        formData.append("file", file);
-        await api.post(`/divisions/${divisionId}/documents`, formData, {
-          headers: { "Content-Type": "multipart/form-data" },
+        const form = new FormData();
+        form.append("file", item.file);
+        const { data } = await api.post(`/divisions/${divisionId}/documents`, form, {
+          onUploadProgress: (event) => {
+            const progress = event.total ? Math.round((event.loaded / event.total) * 100) : 50;
+            setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, progress } : u)));
+          },
         });
-        success++;
+        setData((prev) => [...(prev || []), data]);
+        uploaded += 1;
+        if (data.text_length === 0) toast.warning(`«${item.name}»: текст не извлечён (возможно, скан)`);
       } catch (err) {
-        toast.error(`Ошибка загрузки: ${file.name}`);
+        toast.error(`«${item.name}»: ${errorMessage(err, "ошибка загрузки")}`);
+      } finally {
+        setUploads((prev) => prev.filter((u) => u.id !== item.id));
       }
     }
-    if (success > 0) toast.success(`Загружено файлов: ${success}`);
-    setUploading(false);
-    load();
+    if (uploaded) toast.success(`Загружено файлов: ${uploaded}`);
+    if (inputRef.current) inputRef.current.value = "";
   };
 
-  const deleteDoc = async (docId) => {
+  const confirmDelete = async () => {
+    setBusy(true);
     try {
-      await api.delete(`/divisions/${divisionId}/documents/${docId}`);
+      await api.delete(`/divisions/${divisionId}/documents/${deleting.id}`);
+      setData((prev) => prev.filter((d) => d.id !== deleting.id));
       toast.success("Документ удалён");
-      load();
+      setDeleting(null);
     } catch (err) {
-      toast.error("Ошибка удаления");
+      toast.error(errorMessage(err, "Ошибка удаления"));
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-    uploadFiles(e.dataTransfer.files);
-  };
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} onRetry={reload} />;
 
-  if (loading) {
-    return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 text-blue-500 animate-spin" /></div>;
-  }
+  const totalChars = docs.reduce((sum, d) => sum + (d.text_length || 0), 0);
 
   return (
-    <div className="space-y-6" data-testid="documents-tab">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5" data-testid="documents-tab">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-white">Документы подразделения</h2>
-          <p className="text-sm text-slate-400 mt-1">Загрузите ВНД, регламенты, инструкции, шаблоны</p>
+          <h2 className="text-xl font-semibold text-foreground">Документы подразделения</h2>
+          <p className="mt-1 text-sm text-muted-foreground">ВНД, регламенты, инструкции, шаблоны форм — модель извлечёт из них процессы и роли</p>
         </div>
-        <Badge variant="outline" className="border-slate-700 text-slate-400">{docs.length} файлов</Badge>
+        {docs.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {docs.length} {plural(docs.length, ["файл", "файла", "файлов"])} · {formatNumber(totalChars, 0)} символов текста
+          </p>
+        )}
       </div>
 
       <div
-        className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all ${
-          isDragging ? "border-blue-500 bg-blue-500/5" : "border-slate-700 hover:border-slate-600"
-        }`}
-        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
+        role="button"
+        tabIndex={0}
+        className={cn(
+          "cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-colors",
+          dragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+        )}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          uploadFiles(e.dataTransfer.files);
+        }}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
         data-testid="dropzone"
       >
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".pdf,.docx,.xlsx,.pptx,.txt"
-          className="hidden"
-          onChange={(e) => uploadFiles(e.target.files)}
-          data-testid="file-input"
-        />
-        {uploading ? (
-          <Loader2 className="w-10 h-10 text-blue-400 mx-auto mb-3 animate-spin" />
-        ) : (
-          <Upload className="w-10 h-10 text-slate-500 mx-auto mb-3" strokeWidth={1.5} />
-        )}
-        <p className="text-white font-medium mb-1">
-          {uploading ? "Загрузка..." : "Перетащите файлы или кликните для выбора"}
-        </p>
-        <p className="text-sm text-slate-500">PDF, DOCX, XLSX, PPTX, TXT</p>
+        <input ref={inputRef} type="file" multiple accept={ACCEPTED_FILES} className="hidden" onChange={(e) => uploadFiles(e.target.files)} data-testid="file-input" />
+        <Upload className="mx-auto mb-3 h-9 w-9 text-muted-foreground" strokeWidth={1.5} />
+        <p className="font-medium text-foreground">Перетащите файлы или нажмите для выбора</p>
+        <p className="mt-1 text-sm text-muted-foreground">PDF, DOCX, XLSX, PPTX, TXT, CSV, MD</p>
       </div>
 
-      {docs.length > 0 && (
+      {uploads.length > 0 && (
         <div className="space-y-2">
-          {docs.map((doc, i) => {
-            const Icon = FILE_ICONS[doc.file_type] || FileText;
-            return (
-              <div
-                key={doc.id}
-                className="flex items-center justify-between p-4 rounded-lg bg-slate-900/40 border border-slate-800 hover:border-slate-700 transition-colors animate-fade-in-up"
-                style={{ animationDelay: `${i * 0.05}s` }}
-                data-testid={`doc-item-${i}`}
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-lg bg-blue-600/10 flex items-center justify-center shrink-0">
-                    <Icon className="w-5 h-5 text-blue-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{doc.filename}</p>
-                    <p className="text-xs text-slate-500">{formatSize(doc.file_size)} &middot; {new Date(doc.uploaded_at).toLocaleDateString("ru-RU")}</p>
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => deleteDoc(doc.id)}
-                  className="text-slate-500 hover:text-red-400 hover:bg-red-500/10 shrink-0"
-                  data-testid={`delete-doc-${i}`}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+          {uploads.map((upload) => (
+            <div key={upload.id} className="rounded-lg border border-border p-3">
+              <div className="mb-1.5 flex justify-between text-xs">
+                <span className="truncate text-foreground">{upload.name}</span>
+                <span className="text-muted-foreground">{upload.progress < 100 ? `${upload.progress}%` : "Извлечение текста…"}</span>
               </div>
-            );
-          })}
+              <Progress value={upload.progress} className="h-1.5" />
+            </div>
+          ))}
         </div>
       )}
+
+      {docs.length === 0 && uploads.length === 0 ? (
+        <EmptyState icon={FileText} title="Документы не загружены" description="Без документов анализ опирается только на анкету" />
+      ) : (
+        <div className="space-y-2">
+          {docs.map((doc, index) => (
+            <DocumentRow key={doc.id} doc={doc} index={index} divisionId={divisionId} onDelete={setDeleting} />
+          ))}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title="Удалить документ?"
+        description={deleting?.filename}
+        onConfirm={confirmDelete}
+        busy={busy}
+      />
     </div>
   );
 };

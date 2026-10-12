@@ -11,7 +11,11 @@ NS = {
     "bpmndi": "http://www.omg.org/spec/BPMN/20100524/DI",
     "dc": "http://www.omg.org/spec/DD/20100524/DC",
     "di": "http://www.omg.org/spec/DD/20100524/DI",
+    # Цвета элементов (BPMN in Color + расширение bpmn.io) — понимают bpmn-js и Camunda Modeler
+    "color": "http://www.omg.org/spec/BPMN/non-normative/color/1.0",
+    "bioc": "http://bpmn.io/schema/bpmn/biocolor/1.0",
 }
+STROKE_COLORS = {"serviceTask": "#10b981", "exclusiveGateway": "#f59e0b"}
 for _prefix, _uri in NS.items():
     ET.register_namespace(_prefix, _uri)
 
@@ -195,12 +199,17 @@ def generate_bpmn_xml(process_name: str, steps: list[dict], default_role: str | 
             extra["isMarkerVisible"] = "true"
         if node.tag == "subProcess":
             extra["isExpanded"] = "false"
+        if node.tag in STROKE_COLORS:
+            extra[_q("bioc", "stroke")] = STROKE_COLORS[node.tag]
+            extra[_q("color", "border-color")] = STROKE_COLORS[node.tag]
         element = shape(node.id, x, y, w, h, **extra)
         if node.kind in ("event", "gateway"):
             label = ET.SubElement(element, _q("bpmndi", "BPMNLabel"))
-            label_w = 90 if node.kind == "event" else 120
+            label_w = 90 if node.kind == "event" else 130
+            # Подпись шлюза — над ромбом: снизу проходит стрелка «Нет» (возврат на доработку)
+            label_y = y - 36 if node.kind == "gateway" else y + h + 6
             ET.SubElement(label, _q("dc", "Bounds"), {
-                "x": f"{x + w / 2 - label_w / 2:g}", "y": f"{y + h + 6:g}", "width": f"{label_w:g}", "height": "28",
+                "x": f"{x + w / 2 - label_w / 2:g}", "y": f"{label_y:g}", "width": f"{label_w:g}", "height": "30",
             })
 
     for flow in flows:
@@ -223,7 +232,7 @@ def generate_bpmn_xml(process_name: str, steps: list[dict], default_role: str | 
             else:
                 middle = (start[0] + finish[0]) / 2
                 points = [start, (middle, scy), (middle, tcy), finish]
-            label_pos = (sx + sw + 6, scy - 22)
+            label_pos = (sx + sw + 6, scy + 4)
         edge = ET.SubElement(plane, _q("bpmndi", "BPMNEdge"), {"id": f"{flow['id']}_di", "bpmnElement": flow["id"]})
         for px, py in points:
             ET.SubElement(edge, _q("di", "waypoint"), {"x": f"{px:g}", "y": f"{py:g}"})

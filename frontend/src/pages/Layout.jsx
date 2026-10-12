@@ -1,103 +1,136 @@
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Building2, LogOut, Scan, ChevronLeft, ChevronRight, Sun, Moon, Settings, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import {
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  LayoutDashboard,
+  LogOut,
+  Moon,
+  Scan,
+  Settings,
+  ShieldCheck,
+  Sun,
+} from "lucide-react";
+
+import { ModelConfigModal } from "@/components/LlmSettings";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { useState, useEffect } from "react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { ModelConfigModal } from "@/components/ModelConfigModal";
-import api from "@/lib/api";
+import { cn } from "@/lib/utils";
 
-const navItems = [
-  { to: "/", icon: LayoutDashboard, label: "Дашборд" },
+const NAV_ITEMS = [
+  { to: "/", icon: LayoutDashboard, label: "Дашборд", end: true },
   { to: "/divisions", icon: Building2, label: "Подразделения" },
 ];
 
+const readCollapsed = () => {
+  try {
+    return localStorage.getItem("bp-sidebar-collapsed") === "1" || window.innerWidth < 900;
+  } catch {
+    return false;
+  }
+};
+
+function SidebarItem({ collapsed, icon: Icon, label, children, ...props }) {
+  const content = (
+    <NavLink
+      {...props}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+          isActive
+            ? "bg-primary/10 text-primary ring-1 ring-primary/20"
+            : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground",
+          collapsed && "justify-center px-0"
+        )
+      }
+    >
+      <Icon className="w-5 h-5 shrink-0" strokeWidth={1.6} />
+      {!collapsed && <span className="truncate">{label}</span>}
+      {children}
+    </NavLink>
+  );
+  if (!collapsed) return content;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export default function Layout() {
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { user, isAdmin, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const isAdmin = user?.is_admin === true;
-  
+  useEffect(() => {
+    try {
+      localStorage.setItem("bp-sidebar-collapsed", collapsed ? "1" : "0");
+    } catch {
+      // localStorage недоступен — просто не запоминаем состояние
+    }
+  }, [collapsed]);
 
   const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+    logout();
     navigate("/login");
   };
+
+  const footerButton = "w-full text-muted-foreground hover:text-foreground";
+  const envLabel = process.env.REACT_APP_ENV === "test" ? "TEST" : null;
 
   return (
     <div className="flex h-screen overflow-hidden" data-testid="app-layout">
       <aside
-        className={`${collapsed ? "w-16" : "w-64"} flex flex-col bg-card border-r border-border transition-all duration-300 shrink-0`}
+        className={cn(
+          "flex shrink-0 flex-col border-r border-border bg-card/80 backdrop-blur transition-[width] duration-300",
+          collapsed ? "w-16" : "w-64"
+        )}
         data-testid="sidebar"
       >
-        <div className={`flex items-center gap-3 p-4 ${collapsed ? "justify-center" : ""}`}>
-          <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
-            <Scan className="w-5 h-5 text-white" />
+        <div className={cn("flex items-center gap-3 p-4", collapsed && "justify-center px-2")}>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20">
+            <Scan className="h-5 w-5 text-white" />
           </div>
           {!collapsed && (
-            <div className="overflow-hidden">
-              <h1 className="text-sm font-bold text-foreground truncate">AI BP Scanner</h1>
-              <p className="text-xs text-muted-foreground truncate">Анализ процессов</p>
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 truncate text-sm font-bold text-foreground">
+                AI BP Scanner
+                {envLabel && <span className="rounded bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-500">{envLabel}</span>}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">Анализ бизнес-процессов</p>
             </div>
           )}
         </div>
 
-        <Separator className="bg-border" />
+        <Separator />
 
-        <nav className="flex-1 p-2 space-y-1">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === "/"}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-200 ${
-                  isActive
-                    ? "bg-blue-600/15 text-blue-500 border border-blue-500/20"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                } ${collapsed ? "justify-center" : ""}`
-              }
-              data-testid={`nav-${item.label}`}
-            >
-              <item.icon className="w-5 h-5 shrink-0" strokeWidth={1.5} />
-              {!collapsed && <span>{item.label}</span>}
-            </NavLink>
+        <nav className="flex-1 space-y-1 overflow-y-auto p-2">
+          {NAV_ITEMS.map((item) => (
+            <SidebarItem key={item.to} collapsed={collapsed} data-testid={`nav-${item.label}`} {...item} />
           ))}
-          
           {isAdmin && (
-            <NavLink
-              to="/admin"
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-200 ${
-                  isActive
-                    ? "bg-amber-600/15 text-amber-500 border border-amber-500/20"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
-                } ${collapsed ? "justify-center" : ""}`
-              }
-              data-testid="nav-admin"
-            >
-              <ShieldCheck className="w-5 h-5 shrink-0" strokeWidth={1.5} />
-              {!collapsed && <span>Админ-панель</span>}
-            </NavLink>
+            <SidebarItem collapsed={collapsed} to="/admin" icon={ShieldCheck} label="Админ-панель" data-testid="nav-admin" />
           )}
         </nav>
 
-        <div className="p-2 space-y-1">
-          <Separator className="bg-border mb-2" />
-
+        <div className="space-y-1 p-2">
+          <Separator className="mb-2" />
           <Button
             variant="ghost"
             size="sm"
             onClick={toggleTheme}
-            className={`w-full text-muted-foreground hover:text-foreground ${collapsed ? "justify-center px-0" : "justify-start"}`}
+            className={cn(footerButton, collapsed ? "justify-center px-0" : "justify-start")}
             data-testid="theme-toggle-btn"
           >
-            {theme === "dark" ? <Sun className="w-4 h-4 shrink-0" /> : <Moon className="w-4 h-4 shrink-0" />}
-            {!collapsed && <span className="ml-2">{theme === "dark" ? "Светлая тема" : "Тёмная тема"}</span>}
+            {theme === "dark" ? <Sun /> : <Moon />}
+            {!collapsed && (theme === "dark" ? "Светлая тема" : "Тёмная тема")}
           </Button>
 
           {isAdmin && (
@@ -105,47 +138,52 @@ export default function Layout() {
               variant="ghost"
               size="sm"
               onClick={() => setSettingsOpen(true)}
-              className={`w-full text-muted-foreground hover:text-foreground ${collapsed ? "justify-center px-0" : "justify-start"}`}
+              className={cn(footerButton, collapsed ? "justify-center px-0" : "justify-start")}
               data-testid="settings-btn"
             >
-              <Settings className="w-4 h-4 shrink-0" />
-              {!collapsed && <span className="ml-2">Настройки AI</span>}
+              <Settings />
+              {!collapsed && "Настройки AI"}
             </Button>
           )}
 
-          {!collapsed && (
-            <div className="px-3 py-2">
-              <p className="text-xs font-medium text-foreground truncate">{user.name || "User"}</p>
-              <p className="text-xs text-muted-foreground truncate">{user.email || ""}</p>
+          {!collapsed && user && (
+            <div className="rounded-lg bg-secondary/50 px-3 py-2">
+              <p className="truncate text-xs font-medium text-foreground">{user.name || "Пользователь"}</p>
+              <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+              {isAdmin && <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-500">Администратор</p>}
             </div>
           )}
+
           <Button
             variant="ghost"
             size="sm"
             onClick={handleLogout}
-            className={`w-full text-muted-foreground hover:text-red-400 hover:bg-red-500/10 ${collapsed ? "justify-center px-0" : "justify-start"}`}
+            className={cn("w-full text-muted-foreground hover:bg-red-500/10 hover:text-red-500", collapsed ? "justify-center px-0" : "justify-start")}
             data-testid="logout-btn"
           >
-            <LogOut className="w-4 h-4 shrink-0" />
-            {!collapsed && <span className="ml-2">Выйти</span>}
+            <LogOut />
+            {!collapsed && "Выйти"}
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={() => setCollapsed((value) => !value)}
             className="w-full text-muted-foreground hover:text-foreground"
+            aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
             data-testid="toggle-sidebar-btn"
           >
-            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            {collapsed ? <ChevronRight /> : <ChevronLeft />}
           </Button>
         </div>
       </aside>
 
       <main className="flex-1 overflow-auto bg-background">
-        <Outlet />
+        <div className="mx-auto max-w-[1600px]">
+          <Outlet />
+        </div>
       </main>
 
-      <ModelConfigModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {isAdmin && <ModelConfigModal open={settingsOpen} onOpenChange={setSettingsOpen} />}
     </div>
   );
 }

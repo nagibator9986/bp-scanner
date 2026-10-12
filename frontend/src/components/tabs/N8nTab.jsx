@@ -1,283 +1,311 @@
-import { useState, useEffect } from "react";
-import { Card, CardContent } from "@/components/ui/card";
+import { useMemo, useState } from "react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  Cog,
+  Copy,
+  Download,
+  FileArchive,
+  GitBranch,
+  Info,
+  Loader2,
+  Play,
+  Shuffle,
+  Workflow,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { EmptyState, ErrorState, LoadingState, Panel } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, Workflow, Play, Cog, GitBranch, CheckCircle2, Copy, Clock, ArrowRight, Zap, Download, FileJson } from "lucide-react";
-import { toast } from "sonner";
-import api from "@/lib/api";
+import { useApi } from "@/hooks/useApi";
+import api, { downloadFile, errorMessage } from "@/lib/api";
+import { COMPLEXITY } from "@/lib/constants";
+import { cn } from "@/lib/utils";
 
-const NODE_CONFIG = {
-  trigger: { icon: Play, color: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/30" },
-  action: { icon: Cog, color: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/30" },
-  condition: { icon: GitBranch, color: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" },
-  output: { icon: CheckCircle2, color: "text-purple-400", bg: "bg-purple-500/10", border: "border-purple-500/30" },
+const NODE_TYPES = {
+  trigger: { label: "Триггер", icon: Play, color: "#10b981" },
+  action: { label: "Действие", icon: Cog, color: "#3b82f6" },
+  condition: { label: "Условие", icon: GitBranch, color: "#f59e0b" },
+  transform: { label: "Обработка", icon: Shuffle, color: "#a855f7" },
+  output: { label: "Результат", icon: CheckCircle2, color: "#ec4899" },
 };
 
-const N8nWorkflowDiagram = ({ workflow }) => {
-  if (!workflow.nodes || workflow.nodes.length === 0) return null;
+const NODE_W = 176;
+const NODE_H = 66;
+const GAP_X = 70;
+const GAP_Y = 28;
+
+/** Раскладка графа слева направо: колонка — длина самого длинного пути до ноды. */
+function layoutGraph(nodes, connections) {
+  const depth = Object.fromEntries(nodes.map((n) => [n.id, 0]));
+  for (let i = 0; i < nodes.length; i += 1) {
+    let changed = false;
+    connections.forEach((c) => {
+      const candidate = (depth[c.from] ?? 0) + 1;
+      if (candidate < nodes.length && depth[c.to] !== undefined && depth[c.to] < candidate) {
+        depth[c.to] = candidate;
+        changed = true;
+      }
+    });
+    if (!changed) break;
+  }
+  const columns = {};
+  nodes.forEach((n) => {
+    (columns[depth[n.id]] = columns[depth[n.id]] || []).push(n.id);
+  });
+  const maxRows = Math.max(...Object.values(columns).map((c) => c.length));
+  const height = maxRows * NODE_H + (maxRows - 1) * GAP_Y + 40;
+  const positions = {};
+  Object.entries(columns).forEach(([column, ids]) => {
+    const total = ids.length * NODE_H + (ids.length - 1) * GAP_Y;
+    ids.forEach((id, row) => {
+      positions[id] = { x: 20 + Number(column) * (NODE_W + GAP_X), y: (height - total) / 2 + row * (NODE_H + GAP_Y) };
+    });
+  });
+  const width = 40 + (Math.max(...Object.keys(columns).map(Number)) + 1) * (NODE_W + GAP_X) - GAP_X;
+  return { positions, width, height };
+}
+
+function WorkflowGraph({ workflow }) {
+  const nodes = useMemo(() => workflow.nodes || [], [workflow.nodes]);
+  const connections = useMemo(() => workflow.connections || [], [workflow.connections]);
+  const { positions, width, height } = useMemo(() => layoutGraph(nodes, connections), [nodes, connections]);
+  const branchIndex = {};
 
   return (
-    <div className="overflow-x-auto pb-2">
-      <div className="flex items-center gap-2 min-w-max py-2">
-        {workflow.nodes.map((node, i) => {
-          const cfg = NODE_CONFIG[node.type] || NODE_CONFIG.action;
-          const Icon = cfg.icon;
+    <div className="overflow-x-auto rounded-lg border border-border bg-secondary/20">
+      <svg width={width} height={height} className="block" role="img" aria-label={`Схема workflow ${workflow.name}`}>
+        <defs>
+          <marker id={`arrow-${workflow.id}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" className="fill-muted-foreground" />
+          </marker>
+        </defs>
+        {connections.map((connection) => {
+          const from = positions[connection.from];
+          const to = positions[connection.to];
+          if (!from || !to) return null;
+          const source = nodes.find((n) => n.id === connection.from);
+          const isBranch = (source?.n8n_node || "").toLowerCase() === "if";
+          const index = (branchIndex[connection.from] = (branchIndex[connection.from] ?? -1) + 1);
+          const x1 = from.x + NODE_W;
+          const y1 = from.y + NODE_H / 2;
+          const x2 = to.x;
+          const y2 = to.y + NODE_H / 2;
+          const mid = (x1 + x2) / 2;
           return (
-            <div key={node.id || i} className="flex items-center">
-              {i > 0 && (
-                <div className="w-8 flex items-center justify-center">
-                  <ArrowRight className="w-4 h-4 text-slate-600" />
-                </div>
+            <g key={`${connection.from}-${connection.to}`}>
+              <path
+                d={`M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2 - 2} ${y2}`}
+                fill="none"
+                strokeWidth="1.6"
+                className="stroke-muted-foreground/60"
+                markerEnd={`url(#arrow-${workflow.id})`}
+              />
+              {isBranch && (
+                <text x={mid} y={(y1 + y2) / 2 - 5} fontSize="10" textAnchor="middle" className={index === 0 ? "fill-emerald-500" : "fill-red-500"}>
+                  {index === 0 ? "да" : "нет"}
+                </text>
               )}
-              <div className={`n8n-node ${cfg.bg} border ${cfg.border} rounded-lg px-4 py-3 min-w-[150px]`}>
-                <div className="flex items-center gap-2 mb-1.5">
-                  <Icon className={`w-4 h-4 ${cfg.color}`} />
-                  <span className={`text-xs font-medium ${cfg.color} uppercase tracking-wider`}>{node.type}</span>
-                </div>
-                <p className="text-sm font-medium text-white">{node.name}</p>
-                {node.description && (
-                  <p className="text-xs text-slate-400 mt-1 line-clamp-2">{node.description}</p>
-                )}
-              </div>
-            </div>
+            </g>
           );
         })}
-      </div>
+        {nodes.map((node) => {
+          const position = positions[node.id];
+          const type = NODE_TYPES[node.type] || NODE_TYPES.action;
+          return (
+            <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_W} height={NODE_H}>
+              <div
+                className="flex h-full flex-col justify-center rounded-lg border-l-4 border border-border bg-card px-2.5 py-1.5 shadow-sm"
+                style={{ borderLeftColor: type.color }}
+                title={node.description || node.name}
+              >
+                <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: type.color }}>
+                  <type.icon className="h-3 w-3" /> {node.n8n_node || type.label}
+                </div>
+                <p className="line-clamp-2 text-xs font-medium leading-tight text-foreground">{node.name}</p>
+              </div>
+            </foreignObject>
+          );
+        })}
+      </svg>
     </div>
   );
-};
+}
 
-// Конвертер в формат N8N
-const convertToN8nFormat = (wf) => {
-  const nodeTypeMap = {
-    trigger: "n8n-nodes-base.scheduleTrigger",
-    webhook: "n8n-nodes-base.webhook",
-    action: "n8n-nodes-base.httpRequest",
-    http: "n8n-nodes-base.httpRequest",
-    email: "n8n-nodes-base.emailSend",
-    condition: "n8n-nodes-base.if",
-    switch: "n8n-nodes-base.switch",
-    output: "n8n-nodes-base.respondToWebhook",
-    set: "n8n-nodes-base.set",
-    code: "n8n-nodes-base.code",
-    database: "n8n-nodes-base.postgres",
-    api: "n8n-nodes-base.httpRequest",
-  };
+function WorkflowCard({ workflow, index, divisionId, expanded, onToggle }) {
+  const [copying, setCopying] = useState(false);
+  const complexity = COMPLEXITY[workflow.complexity];
 
-  const nodes = (wf.nodes || []).map((n, i) => ({
-    id: n.id || `node_${i}`,
-    name: n.name,
-    type: nodeTypeMap[n.type] || nodeTypeMap.action,
-    typeVersion: 1,
-    position: [250 + i * 250, 300],
-    parameters: n.parameters || n.config || {},
-  }));
+  const exportUrl = `/divisions/${divisionId}/n8n/${workflow.id}/export`;
 
-  const connections = {};
-  if (wf.connections && Array.isArray(wf.connections)) {
-    wf.connections.forEach(conn => {
-      const fromNode = conn.from || conn.source;
-      const toNode = conn.to || conn.target;
-      if (fromNode && toNode) {
-        if (!connections[fromNode]) {
-          connections[fromNode] = { main: [[]] };
-        }
-        connections[fromNode].main[0].push({
-          node: toNode,
-          type: "main",
-          index: 0
-        });
-      }
-    });
-  } else {
-    // Автоматическое создание связей на основе порядка нод
-    nodes.forEach((node, i) => {
-      if (i < nodes.length - 1) {
-        connections[node.id] = {
-          main: [[{ node: nodes[i + 1].id, type: "main", index: 0 }]]
-        };
-      }
-    });
-  }
-
-  return {
-    name: wf.name,
-    nodes,
-    connections,
-    active: false,
-    settings: {
-      executionOrder: "v1"
-    },
-    versionId: "1",
-    meta: {
-      instanceId: "generated"
+  const download = async () => {
+    try {
+      await downloadFile(exportUrl, "workflow.json");
+      toast.success("Файл для импорта в n8n скачан");
+    } catch (err) {
+      toast.error(errorMessage(err, "Ошибка выгрузки"));
     }
   };
-};
+
+  const copy = async () => {
+    setCopying(true);
+    try {
+      const { data } = await api.get(exportUrl);
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      toast.success("JSON скопирован — вставьте его в редактор n8n (Ctrl+V)");
+    } catch (err) {
+      toast.error(errorMessage(err, "Не удалось скопировать"));
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card/70" data-testid={`n8n-workflow-${index}`}>
+      <button type="button" className="flex w-full items-start gap-3 p-4 text-left hover:bg-secondary/30" onClick={onToggle}>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+          <Workflow className="h-5 w-5 text-primary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground">{workflow.name}</p>
+          {workflow.description && <p className="mt-0.5 text-sm text-muted-foreground">{workflow.description}</p>}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-muted-foreground">
+              {workflow.nodes?.length || 0} нод
+            </Badge>
+            {complexity && (
+              <Badge variant="outline" className={complexity.text}>
+                сложность: {complexity.label.toLowerCase()}
+              </Badge>
+            )}
+            {(workflow.integration_points || []).map((point) => (
+              <Badge key={point} variant="outline" className="border-primary/30 text-primary">
+                {point}
+              </Badge>
+            ))}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          {workflow.estimated_time_savings && (
+            <span className="hidden items-center gap-1 text-xs font-medium text-emerald-500 md:flex">
+              <Clock className="h-3.5 w-3.5" /> {workflow.estimated_time_savings}
+            </span>
+          )}
+          <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", expanded && "rotate-180")} />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="space-y-4 border-t border-border p-4">
+          {(workflow.use_case || workflow.related_recommendation) && (
+            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+              {workflow.use_case && (
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">Сценарий</p>
+                  <p className="mt-0.5 text-foreground">{workflow.use_case}</p>
+                </div>
+              )}
+              {workflow.related_recommendation && (
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">Рекомендация</p>
+                  <p className="mt-0.5 text-foreground">{workflow.related_recommendation}</p>
+                </div>
+              )}
+            </div>
+          )}
+          <WorkflowGraph workflow={workflow} />
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {(workflow.nodes || [])
+              .filter((node) => node.description)
+              .map((node) => {
+                const type = NODE_TYPES[node.type] || NODE_TYPES.action;
+                return (
+                  <div key={node.id} className="flex items-start gap-2 text-xs">
+                    <type.icon className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: type.color }} />
+                    <span>
+                      <span className="font-medium text-foreground">{node.name}:</span>{" "}
+                      <span className="text-muted-foreground">{node.description}</span>
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={download} data-testid={`download-n8n-${index}`}>
+              <Download /> Скачать для импорта в n8n
+            </Button>
+            <Button size="sm" variant="outline" onClick={copy} disabled={copying} data-testid={`copy-n8n-${index}`}>
+              {copying ? <Loader2 className="animate-spin" /> : <Copy />} Копировать JSON
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export const N8nTab = ({ divisionId }) => {
-  const [workflows, setWorkflows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState(null);
+  const { data, error, loading, reload } = useApi(`/divisions/${divisionId}/n8n`, { initial: [] });
+  const [expanded, setExpanded] = useState(undefined);
+  const [zipping, setZipping] = useState(false);
+  const workflows = data || [];
+  const openId = expanded === undefined ? workflows[0]?.id : expanded;
 
-  useEffect(() => {
-    api.get(`/divisions/${divisionId}/n8n`)
-      .then((r) => {
-        setWorkflows(r.data);
-        if (r.data.length > 0) setExpandedId(r.data[0].id);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [divisionId]);
-
-  const copyJson = (wf) => {
-    const n8nJson = convertToN8nFormat(wf);
-    navigator.clipboard.writeText(JSON.stringify(n8nJson, null, 2));
-    toast.success("N8N workflow JSON скопирован в буфер обмена");
+  const downloadAll = async () => {
+    setZipping(true);
+    try {
+      await downloadFile(`/divisions/${divisionId}/n8n/export`, "n8n_workflows.zip");
+      toast.success(`Скачан архив: ${workflows.length} workflows`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Ошибка выгрузки"));
+    } finally {
+      setZipping(false);
+    }
   };
 
-  const downloadJson = (wf) => {
-    const n8nJson = convertToN8nFormat(wf);
-    const blob = new Blob([JSON.stringify(n8nJson, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${wf.name.replace(/[^a-zA-Zа-яА-Я0-9]/g, "_")}_n8n_workflow.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast.success("JSON файл скачан");
-  };
-
-  const downloadAllWorkflows = () => {
-    const allWorkflows = workflows.map(wf => convertToN8nFormat(wf));
-    const blob = new Blob([JSON.stringify(allWorkflows, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `all_n8n_workflows.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast.success(`Скачано ${workflows.length} workflows`);
-  };
-
-  if (loading) {
-    return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 text-blue-500 animate-spin" /></div>;
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} onRetry={reload} />;
+  if (!workflows.length) {
+    return <EmptyState icon={Workflow} title="Workflows не сгенерированы" description="Они появятся после анализа, если модель предложит рекомендации по автоматизации" />;
   }
 
   return (
-    <div className="space-y-6" data-testid="n8n-tab">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+    <div className="space-y-5" data-testid="n8n-tab">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-white">N8N Workflows</h2>
-          <p className="text-sm text-slate-400 mt-1">Готовые MVP автоматизации для импорта в N8N</p>
+          <h2 className="text-xl font-semibold text-foreground">n8n workflows</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Каркасы автоматизаций, готовые к импорту в n8n</p>
         </div>
-        {workflows.length > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={downloadAllWorkflows}
-            className="border-blue-500/30 text-blue-400 hover:bg-blue-600/10"
-            data-testid="download-all-n8n"
-          >
-            <Download className="w-4 h-4 mr-1.5" /> Скачать все ({workflows.length})
-          </Button>
-        )}
+        <Button variant="outline" onClick={downloadAll} disabled={zipping} data-testid="download-all-n8n">
+          {zipping ? <Loader2 className="animate-spin" /> : <FileArchive />} Скачать все (.zip)
+        </Button>
       </div>
 
-      <div className="space-y-4">
-        {workflows.map((wf, i) => {
-          const isExpanded = expandedId === wf.id;
-          return (
-            <Card
-              key={wf.id || i}
-              className="glass-card border-slate-800 bg-transparent overflow-hidden animate-fade-in-up"
-              style={{ animationDelay: `${i * 0.06}s` }}
-              data-testid={`n8n-workflow-${i}`}
-            >
-              <CardContent className="p-0">
-                <div
-                  className="p-5 cursor-pointer hover:bg-slate-800/20 transition-colors"
-                  onClick={() => setExpandedId(isExpanded ? null : wf.id)}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-blue-600/10 flex items-center justify-center shrink-0 mt-0.5">
-                        <Workflow className="w-5 h-5 text-blue-400" />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-semibold text-white">{wf.name}</h3>
-                        <p className="text-sm text-slate-400 mt-0.5">{wf.description}</p>
-                        {wf.related_recommendation && (
-                          <Badge variant="outline" className="border-slate-700 text-slate-500 text-xs mt-2">{wf.related_recommendation}</Badge>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {wf.estimated_time_savings && (
-                        <div className="flex items-center gap-1 text-emerald-400">
-                          <Clock className="w-3.5 h-3.5" />
-                          <span className="text-xs font-medium">{wf.estimated_time_savings}</span>
-                        </div>
-                      )}
-                      <Badge className="bg-blue-600/10 text-blue-400 border border-blue-500/20 text-xs">
-                        {wf.nodes?.length || 0} нод
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-
-                {isExpanded && (
-                  <div className="border-t border-slate-800">
-                    <div className="p-5">
-                      <N8nWorkflowDiagram workflow={wf} />
-                    </div>
-                    <div className="px-5 pb-5 flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => downloadJson(wf)}
-                        className="border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/10"
-                        data-testid={`download-n8n-${i}`}
-                      >
-                        <Download className="w-4 h-4 mr-1.5" /> Скачать JSON
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyJson(wf)}
-                        className="border-slate-700 text-slate-300 hover:bg-slate-800"
-                        data-testid={`copy-n8n-${i}`}
-                      >
-                        <Copy className="w-4 h-4 mr-1.5" /> Копировать
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-blue-500/30 text-blue-400 hover:bg-blue-600/10"
-                        onClick={() => window.open("https://n8n.io", "_blank")}
-                      >
-                        <Zap className="w-4 h-4 mr-1.5" /> Открыть N8N
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
-      {workflows.length === 0 && (
-        <div className="text-center py-16 glass-card rounded-xl">
-          <Workflow className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-          <p className="text-white font-medium">N8N workflows не сгенерированы</p>
-          <p className="text-sm text-slate-400 mt-1">Запустите анализ для создания автоматизаций</p>
+      <Panel>
+        <div className="flex items-start gap-3 text-sm text-muted-foreground">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <p>
+            Импорт: в n8n откройте <span className="font-medium text-foreground">Workflows → Import from File</span> и выберите
+            скачанный JSON (или вставьте скопированный JSON на холст через Ctrl+V). Затем подключите учётные данные (СЭД, почта,
+            Telegram, БД) и уточните параметры нод — описание каждой ноды сохранено в её заметках.
+          </p>
         </div>
-      )}
+      </Panel>
+
+      <div className="space-y-3">
+        {workflows.map((workflow, index) => (
+          <WorkflowCard
+            key={workflow.id}
+            workflow={workflow}
+            index={index}
+            divisionId={divisionId}
+            expanded={openId === workflow.id}
+            onToggle={() => setExpanded(openId === workflow.id ? null : workflow.id)}
+          />
+        ))}
+      </div>
     </div>
   );
 };

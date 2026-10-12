@@ -1,88 +1,54 @@
 import { useState } from "react";
+import { Download, FileText, FileType2, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { FileText, FileSpreadsheet, Download, Loader2 } from "lucide-react";
-import { toast } from "sonner";
-import api from "@/lib/api";
+import { downloadFile, errorMessage } from "@/lib/api";
 
-export function ExportReportButton({ divisionId, divisionName }) {
-  const [exporting, setExporting] = useState(false);
-  const [exportType, setExportType] = useState(null);
+const FORMATS = {
+  word: { label: "Word (.docx)", icon: FileText, ext: "docx" },
+  pdf: { label: "PDF с диаграммами", icon: FileType2, ext: "pdf" },
+};
+
+export function ExportReportButton({ divisionId }) {
+  const [exporting, setExporting] = useState(null);
 
   const exportReport = async (type) => {
+    setExporting(type);
     try {
-      setExporting(true);
-      setExportType(type);
-      
-      const response = await api.get(`/divisions/${divisionId}/export/${type}`, {
-        responseType: 'blob'
-      });
-      
-      const blob = new Blob([response.data], { 
-        type: type === 'word' 
-          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-          : 'application/pdf'
-      });
-      
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${(divisionName || 'report').replace(/[^a-zA-Zа-яА-Я0-9]/g, '_')}_report.${type === 'word' ? 'docx' : 'pdf'}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      toast.success(`Отчёт ${type === 'word' ? 'Word' : 'PDF'} скачан`);
+      const name = await downloadFile(`/divisions/${divisionId}/export/${type}`, `report.${FORMATS[type].ext}`);
+      toast.success(`Отчёт скачан: ${name}`);
     } catch (err) {
-      console.error('Export error:', err);
-      toast.error('Ошибка экспорта отчёта');
+      let message = errorMessage(err, "Ошибка экспорта отчёта");
+      // Ответ об ошибке пришёл как Blob — достаём текст
+      if (err?.response?.data instanceof Blob) {
+        try {
+          message = JSON.parse(await err.response.data.text()).detail || message;
+        } catch {
+          // оставляем общее сообщение
+        }
+      }
+      toast.error(message);
     } finally {
-      setExporting(false);
-      setExportType(null);
+      setExporting(null);
     }
   };
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/10"
-          disabled={exporting}
-          data-testid="export-report-btn"
-        >
-          {exporting ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
-              Экспорт...
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4 mr-1.5" />
-              Экспорт отчёта
-            </>
-          )}
+        <Button variant="outline" disabled={Boolean(exporting)} data-testid="export-report-btn">
+          {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+          {exporting ? "Формирование…" : "Отчёт"}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="bg-slate-900 border-slate-800">
-        <DropdownMenuItem 
-          onClick={() => exportReport('word')}
-          className="text-slate-300 focus:bg-slate-800 focus:text-white cursor-pointer"
-          data-testid="export-word-btn"
-        >
-          <FileText className="w-4 h-4 mr-2 text-blue-400" />
-          Скачать Word (.docx)
-        </DropdownMenuItem>
-        <DropdownMenuItem 
-          onClick={() => exportReport('pdf')}
-          className="text-slate-300 focus:bg-slate-800 focus:text-white cursor-pointer"
-          data-testid="export-pdf-btn"
-        >
-          <FileSpreadsheet className="w-4 h-4 mr-2 text-red-400" />
-          Скачать PDF
-        </DropdownMenuItem>
+      <DropdownMenuContent align="end">
+        {Object.entries(FORMATS).map(([type, format]) => (
+          <DropdownMenuItem key={type} onClick={() => exportReport(type)} className="cursor-pointer" data-testid={`export-${type}-btn`}>
+            <format.icon className="mr-2 h-4 w-4 text-primary" /> {format.label}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
