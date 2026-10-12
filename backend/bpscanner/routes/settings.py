@@ -2,8 +2,9 @@
 from fastapi import APIRouter, Depends
 
 from ..db import db, now_iso
-from ..llm import LLMConfig, LLMError, load_llm_config, normalize_provider, test_llm_connection
-from ..schemas import LLMSettingsUpdate
+from ..economics import load_economics_settings
+from ..llm import LLMClient, LLMConfig, LLMError, load_llm_config, normalize_provider, test_llm_connection
+from ..schemas import EconomicsSettings, LLMSettingsUpdate
 from ..security import get_admin_user, get_current_user
 
 router = APIRouter(tags=["settings"])
@@ -30,6 +31,7 @@ async def _merged_config(data: LLMSettingsUpdate) -> LLMConfig:
         api_key=api_key,
         base_url=data.endpoint_url.strip(),
         max_tokens=data.max_tokens or None,
+        context_tokens=data.context_tokens or None,
         temperature=data.temperature,
         disable_thinking=data.disable_thinking,
         json_mode=data.json_mode,
@@ -49,6 +51,7 @@ async def save_settings(data: LLMSettingsUpdate, admin=Depends(get_admin_user)):
             "endpoint_url": config.base_url,
             "api_key": config.api_key,
             "max_tokens": config.max_tokens,
+            "context_tokens": config.context_tokens,
             "temperature": config.temperature,
             "disable_thinking": config.disable_thinking,
             "json_mode": config.json_mode,
@@ -57,6 +60,7 @@ async def save_settings(data: LLMSettingsUpdate, admin=Depends(get_admin_user)):
         }},
         upsert=True,
     )
+    LLMClient.forget()  # модель или сервер могли смениться — окно определяется заново
     return {"status": "saved", **config.public()}
 
 
@@ -67,3 +71,18 @@ async def test_settings(data: LLMSettingsUpdate, admin=Depends(get_admin_user)):
         return await test_llm_connection(await _merged_config(data))
     except LLMError as exc:
         return {"success": False, "error": exc.message, "detail": exc.detail}
+
+
+@router.get("/settings/economics")
+async def get_economics_settings(user=Depends(get_current_user)):
+    return await load_economics_settings()
+
+
+@router.post("/settings/economics")
+async def save_economics_settings(data: EconomicsSettings, admin=Depends(get_admin_user)):
+    await db.settings.update_one(
+        {"scope": "economics"},
+        {"$set": {"scope": "economics", **data.model_dump(), "updated_at": now_iso(), "updated_by": admin["user_id"]}},
+        upsert=True,
+    )
+    return await load_economics_settings()

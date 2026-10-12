@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { CalendarClock, Filter, Layers, Lightbulb, Search, Target, TrendingUp } from "lucide-react";
+import { CalendarClock, Columns3, Filter, LayoutGrid, Layers, Lightbulb, Search, Settings2, Target, TrendingUp } from "lucide-react";
+import { toast } from "sonner";
 import {
   Bar,
   BarChart,
@@ -15,12 +16,16 @@ import {
 } from "recharts";
 
 import { ChartTooltip, EmptyState, ErrorState, LoadingState, Panel, StatCard } from "@/components/common";
+import { InitiativeBoard, InitiativeDialog, InitiativeMeta, StatusSelect } from "@/components/Initiatives";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useApi } from "@/hooks/useApi";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { CATEGORIES, COMPLEXITY } from "@/lib/constants";
+import api, { errorMessage } from "@/lib/api";
+import { CATEGORIES, COMPLEXITY, INITIATIVE_STATUSES } from "@/lib/constants";
 import { formatNumber, truncate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +36,7 @@ const SORTS = {
   weeks: { label: "Сначала быстрые", fn: (a, b) => (a.implementation_weeks || 99) - (b.implementation_weeks || 99) },
 };
 
-function RecommendationCard({ rec, index }) {
+function RecommendationCard({ rec, index, onStatusChange, onOpen }) {
   const category = CATEGORIES[rec.category] || CATEGORIES.simple_automation;
   const complexity = COMPLEXITY[rec.complexity] || COMPLEXITY.medium;
   return (
@@ -72,7 +77,14 @@ function RecommendationCard({ rec, index }) {
               ))}
             </div>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2 text-xs">
+          <InitiativeMeta rec={rec} />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <StatusSelect value={rec.status} onChange={(value) => onStatusChange(rec, value)} />
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => onOpen(rec)} data-testid={`open-initiative-${index}`}>
+              <Settings2 /> Управление
+            </Button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2 text-xs">
             {rec.implementation_stack ? <span className="font-mono text-muted-foreground">{rec.implementation_stack}</span> : <span />}
             <div className="flex items-center gap-3">
               {rec.implementation_weeks && (
@@ -174,8 +186,11 @@ function Roadmap({ recommendations }) {
 }
 
 export const RecommendationsTab = ({ divisionId }) => {
-  const { data, error, loading, reload } = useApi(`/divisions/${divisionId}/recommendations`, { initial: [] });
+  const { data, error, loading, reload, setData } = useApi(`/divisions/${divisionId}/recommendations`, { initial: [] });
   const [category, setCategory] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [view, setView] = useState("cards");
+  const [opened, setOpened] = useState(null);
   const [complexity, setComplexity] = useState("all");
   const [sort, setSort] = useState("priority");
   const [query, setQuery] = useState("");
@@ -185,10 +200,26 @@ export const RecommendationsTab = ({ divisionId }) => {
     const q = query.trim().toLowerCase();
     return recommendations
       .filter((rec) => category === "all" || rec.category === category)
+      .filter((rec) => status === "all" || (rec.status || "new") === status)
       .filter((rec) => complexity === "all" || rec.complexity === complexity)
       .filter((rec) => !q || `${rec.title} ${rec.description} ${(rec.related_processes || []).join(" ")}`.toLowerCase().includes(q))
       .sort(SORTS[sort].fn);
-  }, [recommendations, category, complexity, sort, query]);
+  }, [recommendations, category, status, complexity, sort, query]);
+
+  const updateInitiative = async (rec, patch) => {
+    const previous = data;
+    setData((items) => items.map((item) => (item.id === rec.id ? { ...item, ...patch } : item)));
+    try {
+      const { data: saved } = await api.patch(`/divisions/${divisionId}/recommendations/${rec.id}`, patch);
+      setData((items) => items.map((item) => (item.id === rec.id ? saved : item)));
+      return true;
+    } catch (err) {
+      setData(previous);
+      toast.error(errorMessage(err, "Не удалось сохранить"));
+      return false;
+    }
+  };
+  const changeStatus = (rec, value) => updateInitiative(rec, { status: value });
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} onRetry={reload} />;
@@ -203,6 +234,8 @@ export const RecommendationsTab = ({ divisionId }) => {
     })
   );
   const totalFte = recommendations.reduce((sum, rec) => sum + (rec.estimated_fte_savings || 0), 0);
+  const committed = recommendations.filter((rec) => ["accepted", "in_progress", "done"].includes(rec.status));
+  const committedFte = committed.reduce((sum, rec) => sum + (rec.estimated_fte_savings || 0), 0);
 
   return (
     <div className="space-y-5" data-testid="recommendations-tab">
@@ -211,8 +244,15 @@ export const RecommendationsTab = ({ divisionId }) => {
         <p className="mt-1 text-sm text-muted-foreground">{recommendations.length} инициатив · оценки эффекта и сроков даны моделью и требуют экспертной проверки</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard icon={TrendingUp} label="Экономия всего" value={`${formatNumber(totalFte)} FTE`} accent="text-emerald-500" />
+        <StatCard
+          icon={Target}
+          label="В портфеле"
+          value={`${committed.length} из ${recommendations.length}`}
+          hint={`${formatNumber(committedFte)} FTE принято или в работе`}
+          accent="text-blue-500"
+        />
         {Object.entries(CATEGORIES).map(([key, config]) => (
           <StatCard
             key={key}
@@ -253,6 +293,19 @@ export const RecommendationsTab = ({ divisionId }) => {
             ))}
           </SelectContent>
         </Select>
+        <Select value={status} onValueChange={setStatus}>
+          <SelectTrigger className="lg:w-44" data-testid="status-filter">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Любой статус</SelectItem>
+            {Object.entries(INITIATIVE_STATUSES).map(([key, config]) => (
+              <SelectItem key={key} value={key}>
+                {config.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={complexity} onValueChange={setComplexity}>
           <SelectTrigger className="lg:w-44">
             <SelectValue />
@@ -280,15 +333,33 @@ export const RecommendationsTab = ({ divisionId }) => {
         </Select>
       </div>
 
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">Найдено: {filtered.length}</p>
+        <Tabs value={view} onValueChange={setView}>
+          <TabsList>
+            <TabsTrigger value="cards" className="gap-1.5" data-testid="view-cards">
+              <LayoutGrid className="h-3.5 w-3.5" /> Карточки
+            </TabsTrigger>
+            <TabsTrigger value="board" className="gap-1.5" data-testid="view-board">
+              <Columns3 className="h-3.5 w-3.5" /> Канбан
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
       {filtered.length === 0 ? (
         <EmptyState icon={Search} title="Нет рекомендаций по выбранным условиям" />
+      ) : view === "board" ? (
+        <InitiativeBoard recommendations={filtered} onStatusChange={changeStatus} onOpen={setOpened} />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
           {filtered.map((rec, index) => (
-            <RecommendationCard key={rec.id || rec.title} rec={rec} index={index} />
+            <RecommendationCard key={rec.id || rec.title} rec={rec} index={index} onStatusChange={changeStatus} onOpen={setOpened} />
           ))}
         </div>
       )}
+
+      <InitiativeDialog rec={opened} onOpenChange={(open) => !open && setOpened(null)} onSave={updateInitiative} />
     </div>
   );
 };

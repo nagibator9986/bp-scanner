@@ -16,7 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from .analytics import SCORE_LABELS
-from .normalize import CATEGORY_LABELS, SCORE_FIELDS
+from .normalize import CATEGORY_LABELS, INITIATIVE_STATUSES, SCORE_FIELDS
 from .questionnaire import QUESTION_LABELS
 
 COMPLEXITY_RU = {"low": "низкая", "medium": "средняя", "high": "высокая"}
@@ -65,6 +65,28 @@ def summary(data: dict) -> dict:
         "fte": round(sum(r.get("estimated_fte_savings") or 0 for r in recommendations), 1),
         "potential": round(sum(potentials) / len(potentials)) if potentials else None,
     }
+
+
+def _num(value, digits: int = 1) -> str:
+    if value is None:
+        return "—"
+    text = f"{value:,.{digits}f}".replace(",", " ").replace(".", ",")
+    return text[:-2] if digits and text.endswith(",0") else text
+
+
+def economics_kpis(data: dict) -> list[list[str]]:
+    economics = data.get("economics")
+    if not economics:
+        return []
+    totals, eco = economics["totals"], economics["settings"]
+    rows = []
+    if totals.get("hours_per_month") is not None:
+        rows.append(["Трудозатраты AS-IS", f"{_num(totals['hours_per_month'])} ч/мес ({_num(totals.get('fte'), 1)} FTE)"])
+    if totals.get("saved_hours_month") is not None:
+        rows.append(["Высвобождается после TO-BE", f"{_num(totals['saved_hours_month'])} ч/мес ({_num(totals.get('saved_fte'), 1)} FTE)"])
+    if totals.get("saved_money_year") is not None:
+        rows.append(["Экономия в год", f"{_num(totals['saved_money_year'], 0)} {eco['currency']}"])
+    return rows
 
 
 def content_disposition(filename: str, fallback: str) -> str:
@@ -144,7 +166,7 @@ def build_word_report(data: dict) -> bytes:
         ["Потенциальная экономия, FTE", stats["fte"]],
         ["TO-BE моделей", stats["tobe"]],
         ["n8n workflows", stats["workflows"]],
-    ])
+    ] + economics_kpis(data))
     for warning in division.get("analysis_warnings") or []:
         document.add_paragraph(f"⚠ {warning}")
 
@@ -202,9 +224,9 @@ def build_word_report(data: dict) -> bytes:
         if not items:
             continue
         document.add_heading(f"4.{number}. {label}", level=2)
-        _table(document, ["Рекомендация", "Приоритет", "Сложность", "FTE", "Срок, нед."], [
-            [r.get("title", ""), r.get("priority", "—"), COMPLEXITY_RU.get(r.get("complexity"), "—"),
-             r.get("estimated_fte_savings", 0), r.get("implementation_weeks") or "—"]
+        _table(document, ["Рекомендация", "Статус", "Приоритет", "Сложность", "FTE", "Срок, нед."], [
+            [r.get("title", ""), INITIATIVE_STATUSES.get(r.get("status") or "new", "—"), r.get("priority", "—"),
+             COMPLEXITY_RU.get(r.get("complexity"), "—"), r.get("estimated_fte_savings", 0), r.get("implementation_weeks") or "—"]
             for r in items
         ])
         for recommendation in items:
@@ -240,11 +262,28 @@ def build_word_report(data: dict) -> bytes:
         _label_value(document, "Ожидаемый эффект", model.get("expected_effect"))
         _label_value(document, "Риски", model.get("risks"))
 
-    document.add_heading("6. n8n workflows", level=1)
+    economics = data.get("economics")
+    document.add_heading("6. Экономический эффект", level=1)
+    if economics and any(r["hours_per_month"] is not None for r in economics["rows"]):
+        eco = economics["settings"]
+        document.add_paragraph(
+            "Трудозатраты = сумма длительностей ручных шагов × число экземпляров процесса в месяц. "
+            f"FTE = часы / {_num(eco['fte_hours_month'], 0)} рабочих часов в месяц."
+            + (f" Стоимость часа: {_num(eco['hourly_cost'], 0)} {eco['currency']}." if eco.get("hourly_cost") else "")
+        ).runs[0].italic = True
+        _table(document, ["Процесс", "Экз./мес", "Ч/мес AS-IS", "Ч/мес TO-BE", "Высвобождается, ч/мес", "FTE", f"В год, {eco['currency']}"], [
+            [r["process_name"], _num(r["volume_per_month"], 0), _num(r["hours_per_month"]), _num(r["tobe_hours_per_month"]),
+             _num(r["saved_hours_month"]), _num(r["saved_fte"], 2), _num(r["saved_money_year"], 0)]
+            for r in economics["rows"]
+        ])
+    else:
+        document.add_paragraph("Недостаточно данных о длительностях шагов и объёмах процессов")
+
+    document.add_heading("7. n8n workflows", level=1)
     if not data["n8n_workflows"]:
         document.add_paragraph("Workflows не сгенерированы")
     for index, workflow in enumerate(data["n8n_workflows"], 1):
-        document.add_heading(f"6.{index}. {workflow.get('name', 'Workflow')}", level=2)
+        document.add_heading(f"7.{index}. {workflow.get('name', 'Workflow')}", level=2)
         if workflow.get("description"):
             document.add_paragraph(workflow["description"])
         _label_value(document, "Экономия времени", workflow.get("estimated_time_savings"))
@@ -350,6 +389,12 @@ def build_pdf_report(data: dict) -> bytes:
         (stats["tobe"], "TO-BE моделей"),
         (stats["workflows"], "n8n workflows"),
     ]
+    economics = data.get("economics")
+    if economics and economics["totals"].get("saved_hours_month") is not None:
+        totals, eco = economics["totals"], economics["settings"]
+        kpis.append((f"{_num(totals['saved_hours_month'])} ч", "в месяц высвобождается после TO-BE"))
+        if totals.get("saved_money_year") is not None:
+            kpis.append((f"{_num(totals['saved_money_year'] / 1_000_000, 1)} млн {eco['currency']}", "экономия в год"))
     html.append("<div class='kpis'>" + "".join(f"<div class='kpi'><b>{e(v)}</b><span>{e(t)}</span></div>" for v, t in kpis) + "</div>")
     for warning in division.get("analysis_warnings") or []:
         html.append(f"<div class='warn'>⚠ {e(warning)}</div>")
@@ -429,6 +474,7 @@ def build_pdf_report(data: dict) -> bytes:
                 f"<span class='tag'>приоритет {e(recommendation.get('priority', '—'))}</span>"
                 f"<span class='tag'>сложность: {e(COMPLEXITY_RU.get(recommendation.get('complexity'), '—'))}</span>"
                 f"<span class='tag'>FTE {e(recommendation.get('estimated_fte_savings', 0))}</span>"
+                f"<span class='tag'>{e(INITIATIVE_STATUSES.get(recommendation.get('status') or 'new', ''))}</span>"
                 + (f"<span class='tag'>{e(recommendation['implementation_weeks'])} нед.</span>" if recommendation.get("implementation_weeks") else "")
                 + f"<p>{e(recommendation.get('description'))}</p>"
                 + (f"<div><b>Эффект:</b> {e(recommendation['effect'])}</div>" if recommendation.get("effect") else "")
@@ -462,7 +508,31 @@ def build_pdf_report(data: dict) -> bytes:
             html.append(f"<div><b>Риски:</b> {e('; '.join(model['risks']))}</div>")
         html.append("</div>")
 
-    html.append("<h2>6. n8n workflows</h2>")
+    html.append("<h2>6. Экономический эффект</h2>")
+    rows = [r for r in (economics or {}).get("rows", []) if r["hours_per_month"] is not None]
+    if rows:
+        eco = economics["settings"]
+        html.append(
+            "<p class='muted'>Трудозатраты = сумма длительностей ручных шагов × число экземпляров процесса в месяц; "
+            f"FTE = часы / {e(_num(eco['fte_hours_month'], 0))} рабочих часов в месяц"
+            + (f"; стоимость часа {e(_num(eco['hourly_cost'], 0))} {e(eco['currency'])}" if eco.get("hourly_cost") else "") + ".</p>"
+        )
+        max_hours = max(r["hours_per_month"] for r in rows) or 1
+        html.append(_svg_hbar([(r["process_name"], r["hours_per_month"]) for r in rows[:12]], max_hours, " ч", "#94a3b8"))
+        html.append("<table><tr><th>Процесс</th><th>Экз./мес</th><th>Ч/мес AS-IS</th><th>Ч/мес TO-BE</th>"
+                    f"<th>Высвобождается, ч/мес</th><th>FTE</th><th>В год, {e(eco['currency'])}</th></tr>")
+        for r in rows:
+            html.append(
+                f"<tr><td>{e(r['process_name'])}</td><td class='num'>{e(_num(r['volume_per_month'], 0))}</td>"
+                f"<td class='num'>{e(_num(r['hours_per_month']))}</td><td class='num'>{e(_num(r['tobe_hours_per_month']))}</td>"
+                f"<td class='num'><b>{e(_num(r['saved_hours_month']))}</b></td><td class='num'>{e(_num(r['saved_fte'], 2))}</td>"
+                f"<td class='num'>{e(_num(r['saved_money_year'], 0))}</td></tr>"
+            )
+        html.append("</table>")
+    else:
+        html.append("<p class='muted'>Недостаточно данных о длительностях шагов и объёмах процессов</p>")
+
+    html.append("<h2>7. n8n workflows</h2>")
     if not data["n8n_workflows"]:
         html.append("<p class='muted'>Workflows не сгенерированы</p>")
     for workflow in data["n8n_workflows"]:

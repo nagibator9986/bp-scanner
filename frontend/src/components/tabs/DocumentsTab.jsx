@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown, Download, File, FileSpreadsheet, FileText, Presentation, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, File, FileSpreadsheet, FileText, Layers, Presentation, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog, EmptyState, ErrorState, LoadingState } from "@/components/common";
@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { useApi } from "@/hooks/useApi";
 import api, { downloadFile, errorMessage } from "@/lib/api";
 import { ACCEPTED_FILES } from "@/lib/constants";
-import { formatDateTime, formatNumber, formatSize, plural } from "@/lib/format";
+import { formatDateTime, formatNumber, formatSize, formatTokens, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const FILE_ICONS = {
@@ -19,6 +19,39 @@ const FILE_ICONS = {
   ".pptx": Presentation,
 };
 const ALLOWED = ACCEPTED_FILES.split(",");
+
+/** Сколько места документы займут в контекстном окне модели и будут ли они конспектироваться. */
+function ContextBudget({ divisionId }) {
+  const { data } = useApi(`/divisions/${divisionId}/documents/budget`);
+  if (!data?.configured || !data.documents?.length) return null;
+  const percent = data.budget_tokens ? Math.min(100, Math.round((data.documents_tokens / data.budget_tokens) * 100)) : 100;
+  return (
+    <div
+      className={cn("rounded-xl border p-4", data.fits ? "border-emerald-500/30 bg-emerald-500/5" : "border-primary/30 bg-primary/5")}
+      data-testid="context-budget"
+    >
+      <div className="flex items-start gap-3">
+        {data.fits ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <Layers className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
+        <div className="min-w-0 flex-1 space-y-2">
+          <p className="text-sm font-medium text-foreground">
+            {data.fits
+              ? "Документы целиком помещаются в контекст модели"
+              : `Документы больше окна модели — перед анализом ${data.digest_documents} ${plural(data.digest_documents, ["документ будет законспектирован", "документа будут законспектированы", "документов будут законспектированы"])}`}
+          </p>
+          <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+            <div className={cn("h-full rounded-full", data.fits ? "bg-emerald-500" : "bg-primary")} style={{ width: `${percent}%` }} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Документы ≈ {formatTokens(data.documents_tokens)} токенов, под них доступно ≈ {formatTokens(data.budget_tokens)} из окна{" "}
+            {formatNumber(data.context_tokens, 0)} токенов ({data.context_source}).
+            {!data.fits &&
+              ` Длинные документы делятся на части и сжимаются моделью до фактов о процессах (≈ ${data.digest_chunks} ${plural(data.digest_chunks, ["запрос", "запроса", "запросов"])}, результат кэшируется) — так анализ учитывает все документы, а не только их начало.`}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function DocumentRow({ doc, index, onDelete, divisionId }) {
   const [open, setOpen] = useState(false);
@@ -202,6 +235,8 @@ export const DocumentsTab = ({ divisionId, onChange }) => {
           ))}
         </div>
       )}
+
+      {docs.length > 0 && <ContextBudget key={docs.map((d) => d.id).join()} divisionId={divisionId} />}
 
       {docs.length === 0 && uploads.length === 0 ? (
         <EmptyState icon={FileText} title="Документы не загружены" description="Без документов анализ опирается только на анкету" />

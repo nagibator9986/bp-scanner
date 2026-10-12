@@ -25,6 +25,7 @@ from mongomock_motor import AsyncMongoMockClient  # noqa: E402
 from bpscanner import db as db_module  # noqa: E402
 from bpscanner.app import create_app  # noqa: E402
 from bpscanner.config import settings  # noqa: E402
+from bpscanner.llm import LLMClient  # noqa: E402
 from tests.fake_llm import FakeLLM  # noqa: E402
 
 ADMIN = {"email": "admin@test.local", "password": "admin-pass-123"}
@@ -43,7 +44,12 @@ def fake_llm():
 def client(fake_llm):
     db_module.set_database(AsyncMongoMockClient()["bp_scanner_test"])
     fake_llm.requests.clear()
+    fake_llm.rejected.clear()
     fake_llm.delay = 0.0
+    fake_llm.context_limit = None
+    fake_llm.report_context = True
+    fake_llm.digest_reply = None
+    LLMClient.forget()
     with TestClient(create_app()) as test_client:
         yield test_client
 

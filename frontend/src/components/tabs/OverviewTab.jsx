@@ -1,18 +1,22 @@
 import { useState } from "react";
 import {
+  AlertCircle,
   BookOpen,
   CheckCircle2,
   Circle,
   ClipboardList,
+  Clock,
   Cpu,
   FileText,
   Gauge,
   GitBranch,
+  History,
   Lightbulb,
   Loader2,
+  MinusCircle,
   Timer,
   Users,
-  Workflow,
+  Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -25,7 +29,7 @@ import { useApi } from "@/hooks/useApi";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import api, { errorMessage } from "@/lib/api";
 import { CATEGORIES, potentialColor } from "@/lib/constants";
-import { formatDate, formatDateTime, formatDuration, formatNumber, truncate } from "@/lib/format";
+import { formatDate, formatDateTime, formatDuration, formatMoney, formatNumber, plural, truncate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function ChecklistItem({ done, title, hint, action }) {
@@ -113,10 +117,75 @@ function KnowledgePanel({ divisionId, canEdit }) {
   );
 }
 
+const RUN_STATUS = {
+  completed: { label: "Завершён", icon: CheckCircle2, className: "text-emerald-500" },
+  in_progress: { label: "Выполняется", icon: Loader2, className: "text-primary animate-spin" },
+  error: { label: "Ошибка", icon: AlertCircle, className: "text-red-500" },
+  superseded: { label: "Прерван новым запуском", icon: MinusCircle, className: "text-muted-foreground" },
+};
+
+function RunHistory({ divisionId }) {
+  const { data: runs } = useApi(`/divisions/${divisionId}/runs`, { initial: [] });
+  const [expanded, setExpanded] = useState(false);
+  if (!runs?.length) return null;
+  const visible = expanded ? runs : runs.slice(0, 5);
+
+  return (
+    <Panel title="История запусков" description="Кто, когда и в каком режиме запускал анализ" icon={History} data-testid="run-history">
+      <ul className="divide-y divide-border">
+        {visible.map((run) => {
+          const status = RUN_STATUS[run.status] || RUN_STATUS.error;
+          const summary = run.summary || {};
+          return (
+            <li key={run.id} className="flex flex-col gap-1 py-2.5 sm:flex-row sm:items-start sm:gap-3">
+              <status.icon className={cn("mt-0.5 hidden h-4 w-4 shrink-0 sm:block", status.className)} />
+              <div className="min-w-0 flex-1">
+                <p className="flex flex-wrap items-center gap-x-2 text-sm text-foreground">
+                  <span className="font-medium">{run.mode_title || "Полный анализ"}</span>
+                  <span className={cn("text-xs", status.className.replace("animate-spin", ""))}>{status.label}</span>
+                  {run.warnings?.length > 0 && <span className="text-xs text-amber-500">предупреждений: {run.warnings.length}</span>}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {formatDateTime(run.started_at)}
+                  {run.started_by_name && ` · ${run.started_by_name}`}
+                  {run.model && ` · ${run.model}`}
+                  {run.duration_sec != null && ` · ${formatDuration(run.duration_sec)}`}
+                </p>
+                {run.status === "completed" && summary.processes_count != null && (
+                  <p className="text-xs text-muted-foreground">
+                    Процессов: {summary.processes_count} · рекомендаций: {summary.recommendations_count ?? 0}
+                    {summary.avg_automation_potential != null && ` · потенциал ${summary.avg_automation_potential}%`}
+                    {summary.saved_hours_month != null && ` · высвобождение ${formatNumber(summary.saved_hours_month, 0)} ч/мес`}
+                  </p>
+                )}
+                {run.documents_stats?.digested > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Документы: законспектировано {run.documents_stats.digested} из {run.documents_stats.documents} ({run.documents_stats.chunks}{" "}
+                    {plural(run.documents_stats.chunks, ["фрагмент", "фрагмента", "фрагментов"])}) под окно {formatNumber(run.context_tokens, 0)} токенов
+                  </p>
+                )}
+                {run.error && <p className="line-clamp-2 text-xs text-red-500">{run.error}</p>}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {runs.length > 5 && (
+        <Button variant="ghost" size="sm" className="mt-1" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Свернуть" : `Показать все (${runs.length})`}
+        </Button>
+      )}
+    </Panel>
+  );
+}
+
 function ResultsSummary({ divisionId, division }) {
   const chart = useChartTheme();
   const { data: scoring } = useApi(`/divisions/${divisionId}/scoring`, { initial: [] });
   const { data: recommendations } = useApi(`/divisions/${divisionId}/recommendations`, { initial: [] });
+  const { data: economics } = useApi(`/divisions/${divisionId}/economics`);
+  const totals = economics?.totals || {};
+  const currency = economics?.settings?.currency || "₸";
 
   const potentials = (scoring || []).map((s) => ({
     name: truncate(s.process_name, 28),
@@ -143,13 +212,33 @@ function ResultsSummary({ divisionId, division }) {
           accent="text-amber-500"
         />
         <StatCard icon={Lightbulb} label="Рекомендации" value={division.recommendations_count || 0} accent="text-emerald-500" />
-        <StatCard icon={Users} label="Экономия" value={`${formatNumber(division.fte_savings_total || 0)} FTE`} accent="text-emerald-500" />
-        <StatCard icon={Workflow} label="n8n" value={division.n8n_workflows_count || 0} accent="text-purple-500" />
+        <StatCard
+          icon={Clock}
+          label="Высвобождается"
+          value={totals.saved_hours_month != null ? `${formatNumber(totals.saved_hours_month, 0)} ч/мес` : "—"}
+          hint={
+            totals.saved_fte != null
+              ? `≈ ${formatNumber(totals.saved_fte, 1)} FTE по расчёту`
+              : `${formatNumber(division.fte_savings_total || 0)} FTE по оценке модели`
+          }
+          accent="text-emerald-500"
+        />
+        <StatCard
+          icon={totals.saved_money_year != null ? Wallet : Users}
+          label={totals.saved_money_year != null ? "Эффект в год" : "Экономия"}
+          value={
+            totals.saved_money_year != null
+              ? formatMoney(totals.saved_money_year, currency)
+              : `${formatNumber(division.fte_savings_total || 0)} FTE`
+          }
+          hint={totals.saved_money_year != null ? "по стоимости часа из настроек" : "стоимость часа не задана"}
+          accent="text-emerald-500"
+        />
         <StatCard
           icon={Timer}
           label="Анализ"
           value={formatDuration(division.analysis_duration_sec)}
-          hint={formatDateTime(division.analysis_completed_at)}
+          hint={`${formatDateTime(division.analysis_completed_at)} · n8n: ${division.n8n_workflows_count || 0}`}
           accent="text-muted-foreground"
         />
       </div>
@@ -209,7 +298,7 @@ function ResultsSummary({ divisionId, division }) {
   );
 }
 
-export function OverviewTab({ division, onNavigate }) {
+export function OverviewTab({ division, status, onNavigate }) {
   const { data: llm } = useApi("/settings");
   const completion = division.questionnaire_completion || {};
   const hasResults = (division.processes_count || 0) > 0;
@@ -282,7 +371,10 @@ export function OverviewTab({ division, onNavigate }) {
 
       {hasResults && <ResultsSummary divisionId={division.id} division={division} />}
 
-      <KnowledgePanel divisionId={division.id} canEdit={canEdit} />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <KnowledgePanel divisionId={division.id} canEdit={canEdit} />
+        <RunHistory key={`runs-${status?.status || division.analysis_status}`} divisionId={division.id} />
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { AlertTriangle, BookOpen, Bot, Building2, CheckCircle2, FileCode, FileText, RefreshCw, Users } from "lucide-react";
+import { AlertTriangle, BookOpen, Bot, Building2, Calculator, CheckCircle2, FileCode, FileText, RefreshCw, Users } from "lucide-react";
 
 import { DivisionsDataTab } from "@/components/admin/DivisionsDataTab";
 import { ErrorLogsTab } from "@/components/admin/ErrorLogsTab";
@@ -8,6 +8,7 @@ import { KnowledgeTab } from "@/components/admin/KnowledgeTab";
 import { PromptsTab } from "@/components/admin/PromptsTab";
 import { UsersTab } from "@/components/admin/UsersTab";
 import { ErrorState, PageHeader, Panel, StatCard } from "@/components/common";
+import { EconomicsSettingsForm } from "@/components/EconomicsSettings";
 import { LlmSettingsForm } from "@/components/LlmSettings";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,6 +23,7 @@ const TABS = [
   { value: "users", label: "Пользователи", icon: Users },
   { value: "divisions", label: "Подразделения", icon: Building2 },
   { value: "llm", label: "AI-модель", icon: Bot },
+  { value: "economics", label: "Экономика", icon: Calculator },
 ];
 const DEFAULT_TAB = TABS[0].value;
 
@@ -228,6 +230,13 @@ export default function AdminPage() {
           >
             <div className="max-w-2xl pt-2">
               <LlmSettingsForm onSaved={refreshStats} />
+            </div>
+          </Panel>
+        </TabsContent>
+        <TabsContent value="economics" className="mt-0">
+          <Panel title="Параметры расчёта экономического эффекта" icon={Calculator} description="Используются в аналитике, отчётах и выгрузках Excel">
+            <div className="max-w-3xl pt-2">
+              <EconomicsSettingsForm />
             </div>
           </Panel>
         </TabsContent>

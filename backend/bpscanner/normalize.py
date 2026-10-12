@@ -17,6 +17,14 @@ SCORE_FIELDS = [
 ]
 
 CATEGORIES = ("simple_automation", "classic_digitization", "ai_reengineering")
+# Статусы инициатив (рекомендаций) в портфеле трансформации
+INITIATIVE_STATUSES = {
+    "new": "Новая",
+    "accepted": "Принята",
+    "in_progress": "В работе",
+    "done": "Внедрена",
+    "rejected": "Отклонена",
+}
 CATEGORY_LABELS = {
     "simple_automation": "Простая автоматизация",
     "classic_digitization": "Классическая цифровизация",
@@ -170,7 +178,9 @@ def normalize_step(step: Any) -> dict | None:
         "type": step_type,
         "manual": to_bool(data.get("manual"), not automated),
         "automated": automated,
-        "duration_min": to_float(data.get("duration_min") or data.get("duration"), 0, 100000, None),
+        "duration_min": to_float(
+            data.get("duration_min") or data.get("duration_minutes") or data.get("duration"), 0, 100000, None
+        ),
     }
 
 
@@ -199,6 +209,7 @@ def normalize_process(raw: dict) -> dict | None:
         "trigger": text(raw.get("trigger"), 500),
         "frequency": text(raw.get("frequency"), 200),
         "volume": text(raw.get("volume"), 200),
+        "volume_per_month": to_float(raw.get("volume_per_month"), 0, 10_000_000, None),
         "sla": text(raw.get("sla"), 300),
         "roles": roles,
         "systems": systems,
@@ -302,6 +313,9 @@ def normalize_recommendations(raw_items: list[dict], processes: list[dict], limi
             "estimated_fte_savings": round(to_float(raw.get("estimated_fte_savings") or raw.get("fte_savings"), 0, 100, 0.0), 2),
             "implementation_weeks": to_int(raw.get("implementation_weeks") or raw.get("weeks"), 1, 260, None),
             "kpi": text(raw.get("kpi"), 500),
+            "status": "new",
+            "owner": "",
+            "comment": "",
         })
         if len(result) >= limit:
             break

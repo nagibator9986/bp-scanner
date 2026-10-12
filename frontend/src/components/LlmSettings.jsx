@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import api, { errorMessage } from "@/lib/api";
+import { formatNumber, formatTokens } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const PROVIDERS = [
@@ -21,6 +22,7 @@ const EMPTY = {
   model_name: "",
   api_key: "",
   max_tokens: "",
+  context_tokens: "",
   temperature: 0.2,
   disable_thinking: false,
   json_mode: false,
@@ -72,6 +74,7 @@ export function LlmSettingsForm({ onSaved }) {
           model_name: data.model_name || "",
           api_key: "",
           max_tokens: data.max_tokens || "",
+          context_tokens: data.context_tokens || "",
           temperature: data.temperature ?? 0.2,
           disable_thinking: Boolean(data.disable_thinking),
           json_mode: Boolean(data.json_mode),
@@ -92,6 +95,7 @@ export function LlmSettingsForm({ onSaved }) {
   const payload = () => ({
     ...form,
     max_tokens: form.max_tokens ? Number(form.max_tokens) : null,
+    context_tokens: form.context_tokens ? Number(form.context_tokens) : null,
     temperature: Number(form.temperature) || 0,
   });
 
@@ -192,7 +196,7 @@ export function LlmSettingsForm({ onSaved }) {
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Field label="Макс. токенов ответа" hint="Пусто — по умолчанию сервера">
           <Input
             type="number"
@@ -200,6 +204,16 @@ export function LlmSettingsForm({ onSaved }) {
             value={form.max_tokens}
             onChange={(e) => set("max_tokens")(e.target.value)}
             placeholder="8192"
+          />
+        </Field>
+        <Field label="Контекстное окно" hint="Пусто — определить автоматически (vLLM: max_model_len)">
+          <Input
+            type="number"
+            min={0}
+            value={form.context_tokens}
+            onChange={(e) => set("context_tokens")(e.target.value)}
+            placeholder="авто"
+            data-testid="context-tokens-input"
           />
         </Field>
         <Field label="Температура" hint="0–2, для анализа лучше 0–0.3">
@@ -249,6 +263,12 @@ export function LlmSettingsForm({ onSaved }) {
             <p className="font-medium text-foreground">
               {testResult.success ? `Соединение установлено. Ответ модели: «${testResult.reply}»` : testResult.error}
             </p>
+            {testResult.success && testResult.context_tokens && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Контекстное окно: {formatNumber(testResult.context_tokens, 0)} токенов ({testResult.context_source}) · под промпт ≈{" "}
+                {formatTokens(testResult.input_budget)} токенов, остальное — под ответ
+              </p>
+            )}
             {testResult.detail && <p className="mt-1 break-words text-xs text-muted-foreground">{testResult.detail}</p>}
           </div>
         </div>

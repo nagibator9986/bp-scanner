@@ -28,6 +28,14 @@ STEP_META = {
         "title": "N8N workflows",
         "placeholders": ["division_name", "processes", "recommendations", "knowledge_context"],
     },
+    "document_digest": {
+        "title": "Конспект документов",
+        "placeholders": ["division_name", "document_name", "chunk_label", "chunk"],
+    },
+    "questionnaire_prefill": {
+        "title": "Заполнение анкеты по документам",
+        "placeholders": ["division_name", "division_description", "questionnaire", "questions", "documents", "knowledge_context"],
+    },
 }
 
 # Важно: в шаблонах фигурные скобки JSON пишутся одинарными.
@@ -52,10 +60,11 @@ DEFAULT_PROMPTS = {
 
 {knowledge_context}
 
-Выяви ключевые бизнес-процессы подразделения (от 4 до 10). Для каждого процесса опиши последовательность шагов от триггера до результата: кто выполняет шаг (роль), в какой системе, сколько минут он занимает, выполняется ли вручную. Проверки и согласования с двумя исходами оформляй шагом с "type": "decision" и вопросом в названии.
+Выяви ключевые бизнес-процессы подразделения (от 4 до 10). Для каждого процесса опиши последовательность шагов от триггера до результата: кто выполняет шаг (роль), в какой системе, сколько минут рабочего времени он занимает (duration_min — число), выполняется ли вручную. Проверки и согласования с двумя исходами оформляй шагом с "type": "decision" и вопросом в названии.
+volume_per_month — оценка числа экземпляров процесса в месяц (число): возьми из анкеты и документов, а если данных нет — дай реалистичную оценку для подразделения такого размера.
 
 Верни JSON-массив:
-[{"name":"Название процесса","description":"Цель и краткое описание","owner":"Владелец процесса","trigger":"Что запускает процесс","frequency":"Частота","volume":"Объём, если известен","sla":"Норматив","roles":["Роль 1","Роль 2"],"systems":["Система 1"],"input_documents":["Документ"],"output_documents":["Документ"],"pain_points":["Проблема"],"steps":[{"name":"Шаг","role":"Роль 1","system":"Система 1","type":"task","manual":true,"duration_min":15},{"name":"Документы корректны?","role":"Роль 2","type":"decision"}]}]""",
+[{"name":"Название процесса","description":"Цель и краткое описание","owner":"Владелец процесса","trigger":"Что запускает процесс","frequency":"Частота","volume_per_month":120,"sla":"Норматив","roles":["Роль 1","Роль 2"],"systems":["Система 1"],"input_documents":["Документ"],"output_documents":["Документ"],"pain_points":["Проблема"],"steps":[{"name":"Шаг","role":"Роль 1","system":"Система 1","type":"task","manual":true,"duration_min":15},{"name":"Документы корректны?","role":"Роль 2","type":"decision"}]}]""",
     },
     "scoring": {
         "description": "Скоринг процессов по 6 измерениям",
@@ -122,10 +131,10 @@ AS-IS процессы:
 
 {knowledge_context}
 
-Для каждого процесса из AS-IS (process_name точно как во входных данных) опиши целевой процесс: какие шаги убраны, объединены и автоматизированы, и новую последовательность шагов. Автоматические шаги помечай "automated": true, а в role указывай систему или робота.
+Для каждого процесса из AS-IS (process_name точно как во входных данных) опиши целевой процесс: какие шаги убраны, объединены и автоматизированы, и новую последовательность шагов. Автоматические шаги помечай "automated": true, а в role указывай систему или робота. Для каждого шага укажи duration_min — минуты рабочего времени сотрудника (для автоматических шагов 0); сравнивай с длительностями шагов AS-IS.
 
 Верни JSON-массив:
-[{"process_name":"Название AS-IS процесса","improvements":["Улучшение"],"removed_steps":["Шаг"],"merged_steps":["Шаг А + Шаг Б"],"automated_steps":["Шаг"],"new_process":{"name":"Название TO-BE","steps":[{"name":"Шаг","role":"Роль","system":"Система","type":"task","automated":false}]},"expected_effect":"Эффект","time_reduction_percent":40,"risks":["Риск"],"dependencies":["Зависимость"]}]""",
+[{"process_name":"Название AS-IS процесса","improvements":["Улучшение"],"removed_steps":["Шаг"],"merged_steps":["Шаг А + Шаг Б"],"automated_steps":["Шаг"],"new_process":{"name":"Название TO-BE","steps":[{"name":"Шаг","role":"Роль","system":"Система","type":"task","automated":false,"duration_min":10}]},"expected_effect":"Эффект","time_reduction_percent":40,"risks":["Риск"],"dependencies":["Зависимость"]}]""",
     },
     "n8n": {
         "description": "Генерация n8n workflows для автоматизации",
@@ -152,6 +161,47 @@ AS-IS процессы:
 Верни JSON-массив:
 [{"name":"Название","description":"Что делает workflow","use_case":"Сценарий","related_recommendation":"Название рекомендации","related_process":"Название процесса","complexity":"medium","estimated_time_savings":"10 часов в неделю","integration_points":["Система"],"nodes":[{"id":"trigger_1","type":"trigger","n8n_node":"scheduleTrigger","name":"По будням в 9:00","description":"Запуск по расписанию","parameters":{"cron":"0 9 * * 1-5"}},{"id":"http_1","type":"action","n8n_node":"httpRequest","name":"Получить заявки","description":"Запрос к API СЭД","parameters":{"method":"GET","url":"https://sed.example/api/requests"}}],"connections":[{"from":"trigger_1","to":"http_1"}]}]""",
     },
+}
+
+DEFAULT_PROMPTS["document_digest"] = {
+    "description": "Конспект фрагментов длинных документов перед извлечением процессов",
+    "system_prompt": (
+        "Ты — бизнес-аналитик банка. Извлекаешь из фрагмента внутреннего документа факты, важные для описания "
+        "бизнес-процессов. Пиши кратко, по-русски, списком, без вступлений и выводов."
+    ),
+    "user_prompt_template": """Подразделение: "{division_name}"
+Фрагмент документа «{document_name}» ({chunk_label}):
+
+{chunk}
+
+Выпиши кратко (до 20 пунктов), что есть во фрагменте: процессы и операции; шаги и их последовательность; роли и ответственные; информационные системы; сроки, SLA, объёмы и частота; согласования, лимиты и полномочия; ручные операции и проблемы.
+Если во фрагменте нет такой информации, ответь одной фразой: нет данных.""",
+}
+
+DEFAULT_PROMPTS["questionnaire_prefill"] = {
+    "description": "Предложение ответов анкеты на основе документов подразделения",
+    "system_prompt": (
+        "Ты — бизнес-аналитик банка. Заполняешь анкету подразделения по его внутренним документам. "
+        "Используй только факты из документов, ничего не выдумывай. Отвечай строго валидным JSON."
+    ),
+    "user_prompt_template": """Подразделение: "{division_name}"
+Описание: {division_description}
+
+## Текущие ответы анкеты
+{questionnaire}
+
+## Документы
+{documents}
+
+{knowledge_context}
+
+## Вопросы анкеты
+{questions}
+
+Предложи ответы на вопросы, для которых в документах есть информация. Ответы — развёрнутые, но конкретные, на русском языке. Для вопросов типа boolean верни true или false, для select — точно один из перечисленных вариантов.
+
+Верни JSON-объект, где ключи — id вопросов, например:
+{"dept_function":"Ответ","has_approvals":true}""",
 }
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")

@@ -10,19 +10,41 @@ from fastapi.responses import Response
 
 from ..analytics import build_dashboard
 from ..db import db
+from ..economics import load_economics_settings, summarize
+from ..excel import division_workbook, portfolio_workbook
 from ..n8n import export_filename, to_n8n_workflow
 from ..pipeline import analysis_status, start_analysis
 from ..reports import build_pdf_report, build_word_report, content_disposition, report_filename
+from ..schemas import AnalyzeRequest
 from ..security import ACCESS_WRITE, get_current_user, get_division_for
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 router = APIRouter(tags=["analysis"])
 
 
 @router.post("/divisions/{division_id}/analyze")
-async def run_analysis(division_id: str, user=Depends(get_current_user)):
+async def run_analysis(division_id: str, data: AnalyzeRequest | None = None, user=Depends(get_current_user)):
     await get_division_for(user, division_id, ACCESS_WRITE)
-    run_id = await start_analysis(division_id, user["user_id"])
-    return {"status": "started", "run_id": run_id}
+    mode = data.mode if data else "full"
+    run_id = await start_analysis(division_id, user, mode)
+    return {"status": "started", "run_id": run_id, "mode": mode}
+
+
+@router.get("/divisions/{division_id}/runs")
+async def get_runs(division_id: str, user=Depends(get_current_user)):
+    """История запусков анализа."""
+    await get_division_for(user, division_id)
+    return await db.analysis_runs.find({"division_id": division_id}, {"_id": 0}).sort("started_at", -1).to_list(30)
+
+
+@router.get("/divisions/{division_id}/economics")
+async def get_economics(division_id: str, user=Depends(get_current_user)):
+    """Трудозатраты AS-IS / TO-BE и экономия по процессам."""
+    await get_division_for(user, division_id)
+    return summarize(
+        await _results("processes", division_id), await _results("tobe_models", division_id), await load_economics_settings()
+    )
 
 
 @router.get("/divisions/{division_id}/analysis-status")
@@ -124,7 +146,7 @@ async def export_n8n(division_id: str, workflow_id: str, user=Depends(get_curren
 
 async def _report_data(division: dict) -> dict:
     division_id = division["id"]
-    return {
+    data = {
         "division": division,
         "questionnaire": await db.questionnaires.find_one({"division_id": division_id}, {"_id": 0}),
         "processes": await _results("processes", division_id),
@@ -133,6 +155,8 @@ async def _report_data(division: dict) -> dict:
         "tobe": await _results("tobe_models", division_id),
         "n8n_workflows": await _results("n8n_workflows", division_id),
     }
+    data["economics"] = summarize(data["processes"], data["tobe"], await load_economics_settings())
+    return data
 
 
 @router.get("/divisions/{division_id}/export/word")
@@ -162,6 +186,31 @@ async def export_pdf_report(division_id: str, user=Depends(get_current_user)):
     )
 
 
+@router.get("/divisions/{division_id}/export/xlsx")
+async def export_xlsx(division_id: str, user=Depends(get_current_user)):
+    division = await get_division_for(user, division_id)
+    data = await _report_data(division)
+    content = await asyncio.to_thread(division_workbook, data, data["economics"])
+    filename, fallback = report_filename(division, "xlsx")
+    return Response(content=content, media_type=XLSX, headers={"Content-Disposition": content_disposition(filename, fallback)})
+
+
 @router.get("/dashboard")
 async def get_dashboard(user=Depends(get_current_user)):
     return await build_dashboard(user)
+
+
+@router.get("/dashboard/export/xlsx")
+async def export_portfolio(user=Depends(get_current_user)):
+    """Портфель: подразделения, все инициативы и процессы в одной книге Excel."""
+    dashboard = await build_dashboard(user)
+    ids = [d["id"] for d in dashboard["divisions"]]
+    query = {"division_id": {"$in": ids}}
+    recommendations = await db.recommendations.find(query, {"_id": 0}).sort([("division_id", 1), ("order", 1)]).to_list(20000)
+    processes = await db.processes.find(query, {"_id": 0}).sort([("division_id", 1), ("order", 1)]).to_list(20000)
+    scoring = await db.scoring.find(query, {"_id": 0}).to_list(20000)
+    content = await asyncio.to_thread(portfolio_workbook, dashboard, recommendations, processes, scoring)
+    return Response(
+        content=content, media_type=XLSX,
+        headers={"Content-Disposition": content_disposition("Портфель_трансформации.xlsx", "portfolio.xlsx")},
+    )

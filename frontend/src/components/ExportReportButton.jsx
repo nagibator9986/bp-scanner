@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, FileText, FileType2, Loader2 } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, FileType2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { downloadFile, errorMessage } from "@/lib/api";
 const FORMATS = {
   word: { label: "Word (.docx)", icon: FileText, ext: "docx" },
   pdf: { label: "PDF с диаграммами", icon: FileType2, ext: "pdf" },
+  xlsx: { label: "Excel (все данные)", icon: FileSpreadsheet, ext: "xlsx" },
 };
 
 export function ExportReportButton({ divisionId }) {

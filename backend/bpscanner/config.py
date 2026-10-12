@@ -49,8 +49,13 @@ class Settings:
         default_factory=lambda: Path(os.environ.get("UPLOAD_DIR", str(BACKEND_DIR / "app" / "uploads")))
     )
     max_upload_mb: int = field(default_factory=lambda: _int("MAX_UPLOAD_MB", 25))
-    # Сколько символов из документов подразделения попадает в промпт (под контекст модели)
-    max_document_chars: int = field(default_factory=lambda: _int("MAX_DOCUMENT_CHARS", 30000))
+    # Верхний предел объёма документов в промпте (символов). Фактический бюджет считается
+    # от контекстного окна модели и обычно меньше; предел нужен для моделей с огромным окном.
+    max_document_chars: int = field(default_factory=lambda: _int("MAX_DOCUMENT_CHARS", 60000))
+    # Документы, не помещающиеся в бюджет, конспектируются частями не больше такого размера
+    digest_chunk_chars: int = field(default_factory=lambda: _int("DIGEST_CHUNK_CHARS", 12000))
+    # Предел числа фрагментов на конспектирование за один анализ (делится между документами)
+    max_digest_chunks: int = field(default_factory=lambda: _int("MAX_DIGEST_CHUNKS", 60))
 
     # Настройки LLM по умолчанию (OpenAI-совместимый API, например внутренний Qwen за vLLM).
     # Используются, пока администратор не сохранил свои настройки в интерфейсе.
@@ -63,6 +68,11 @@ class Settings:
     llm_disable_thinking: bool = field(default_factory=lambda: _bool("LLM_DISABLE_THINKING", False))
     llm_json_mode: bool = field(default_factory=lambda: _bool("LLM_JSON_MODE", False))
     llm_max_concurrency: int = field(default_factory=lambda: _int("LLM_MAX_CONCURRENCY", 2))
+    # Контекстное окно модели (токены: промпт + ответ), если его не удалось узнать у сервера.
+    # vLLM сообщает окно сам (max_model_len в /v1/models); настройка администратора может его уменьшить.
+    llm_context_tokens: int = field(default_factory=lambda: _int("LLM_CONTEXT_TOKENS", 32768))
+    # Сколько токенов окна оставлять под ответ, если LLM_MAX_TOKENS не задан
+    llm_output_reserve: int = field(default_factory=lambda: _int("LLM_OUTPUT_RESERVE", 4096))
 
     ai_step_timeout: int = field(default_factory=lambda: _int("AI_STEP_TIMEOUT", 600))
     ai_max_attempts: int = field(default_factory=lambda: _int("AI_MAX_ATTEMPTS", 3))

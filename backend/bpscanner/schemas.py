@@ -1,5 +1,5 @@
 """Модели входных данных API."""
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +53,8 @@ class LLMSettingsUpdate(BaseModel):
     api_key: str = Field(default="", max_length=500)
     clear_api_key: bool = False
     max_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    # Контекстное окно модели в токенах; пусто — определить автоматически
+    context_tokens: int | None = Field(default=None, ge=0, le=10_000_000)
     temperature: float = Field(default=0.2, ge=0, le=2)
     disable_thinking: bool = False
     json_mode: bool = False
@@ -101,3 +103,47 @@ class PasswordReset(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str = Field(max_length=128)
     new_password: str = Field(min_length=6, max_length=128)
+
+
+class AnalyzeRequest(BaseModel):
+    mode: Literal["full", "scoring", "recommendations"] = "full"
+
+
+class StepInput(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    role: str = Field(default="", max_length=120)
+    system: str = Field(default="", max_length=120)
+    type: Literal["task", "decision", "subprocess"] = "task"
+    manual: bool = True
+    automated: bool = False
+    duration_min: float | None = Field(default=None, ge=0, le=100000)
+
+
+class ProcessInput(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    owner: str = Field(default="", max_length=200)
+    trigger: str = Field(default="", max_length=500)
+    frequency: str = Field(default="", max_length=200)
+    volume_per_month: float | None = Field(default=None, ge=0, le=10_000_000)
+    sla: str = Field(default="", max_length=300)
+    roles: list[str] = Field(default_factory=list, max_length=50)
+    systems: list[str] = Field(default_factory=list, max_length=50)
+    pain_points: list[str] = Field(default_factory=list, max_length=50)
+    input_documents: list[str] = Field(default_factory=list, max_length=50)
+    output_documents: list[str] = Field(default_factory=list, max_length=50)
+    steps: list[StepInput] = Field(default_factory=list, max_length=80)
+
+
+class InitiativeUpdate(BaseModel):
+    status: Literal["new", "accepted", "in_progress", "done", "rejected"] | None = None
+    owner: str | None = Field(default=None, max_length=200)
+    comment: str | None = Field(default=None, max_length=3000)
+    due_date: str | None = Field(default=None, pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    priority: int | None = Field(default=None, ge=1, le=5)
+
+
+class EconomicsSettings(BaseModel):
+    hourly_cost: float = Field(default=0, ge=0, le=10_000_000)
+    currency: str = Field(default="₸", min_length=1, max_length=8)
+    fte_hours_month: float = Field(default=165, gt=0, le=744)

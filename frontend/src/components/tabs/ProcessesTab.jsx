@@ -8,10 +8,14 @@ import {
   GitBranch,
   Hand,
   Monitor,
+  Pencil,
+  Plus,
   Search,
   Split,
+  Trash2,
   Users,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   CartesianGrid,
   Cell,
@@ -31,11 +35,14 @@ import {
   ZAxis,
 } from "recharts";
 
-import { EmptyState, ErrorState, LoadingState, Meter, Panel } from "@/components/common";
+import { ConfirmDialog, EmptyState, ErrorState, LoadingState, Meter, Panel } from "@/components/common";
+import { ProcessEditorDialog } from "@/components/ProcessEditor";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useApi } from "@/hooks/useApi";
 import { useChartTheme } from "@/hooks/useChartTheme";
+import api, { errorMessage } from "@/lib/api";
 import { SCORE_FIELDS, potentialColor, scoreColor } from "@/lib/constants";
 import { formatNumber, truncate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -105,7 +112,7 @@ function StepsTimeline({ steps }) {
   );
 }
 
-function ProcessCard({ process, score, expanded, selected, onToggle, index }) {
+function ProcessCard({ process, score, expanded, selected, onToggle, index, onEdit, onDelete }) {
   const metrics = process.metrics || {};
   const steps = process.steps_detail?.length ? process.steps_detail : (process.steps || []).map((name) => ({ name }));
   return (
@@ -118,7 +125,14 @@ function ProcessCard({ process, score, expanded, selected, onToggle, index }) {
           <GitBranch className="h-4 w-4 text-primary" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-foreground">{process.name}</p>
+          <p className="flex items-center gap-2 truncate text-sm font-medium text-foreground">
+            <span className="truncate">{process.name}</span>
+            {process.edited && (
+              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] text-primary">
+                изменён вручную
+              </Badge>
+            )}
+          </p>
           <p className="truncate text-xs text-muted-foreground">
             {[
               `${metrics.steps_count ?? steps.length} шагов`,
@@ -184,6 +198,14 @@ function ProcessCard({ process, score, expanded, selected, onToggle, index }) {
             </div>
           )}
           {score?.rationale && <p className="text-xs italic text-muted-foreground">Обоснование оценки: {score.rationale}</p>}
+          <div className="flex gap-2 border-t border-border pt-3">
+            <Button size="sm" variant="outline" onClick={() => onEdit(process)} data-testid={`edit-process-${index}`}>
+              <Pencil /> Изменить шаги и параметры
+            </Button>
+            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-red-500" onClick={() => onDelete(process)}>
+              <Trash2 /> Удалить
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -300,12 +322,35 @@ function ScoreHeatmap({ scoring, onSelect, selectedName }) {
   );
 }
 
-export const ProcessesTab = ({ divisionId }) => {
+export const ProcessesTab = ({ divisionId, onChanged }) => {
   const processesApi = useApi(`/divisions/${divisionId}/processes`, { initial: [] });
   const scoringApi = useApi(`/divisions/${divisionId}/scoring`, { initial: [] });
   const [expanded, setExpanded] = useState(null);
   const [selectedName, setSelectedName] = useState(null);
   const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState(null); // null — закрыт, {} — новый процесс, объект — редактирование
+  const [deleting, setDeleting] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const afterChange = () => {
+    processesApi.reload({ silent: true });
+    scoringApi.reload({ silent: true });
+    onChanged?.();
+  };
+
+  const confirmDelete = async () => {
+    setBusy(true);
+    try {
+      await api.delete(`/divisions/${divisionId}/processes/${deleting.id}`);
+      toast.success("Процесс удалён");
+      setDeleting(null);
+      afterChange();
+    } catch (err) {
+      toast.error(errorMessage(err, "Не удалось удалить процесс"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const processes = processesApi.data || [];
   const scoring = useMemo(() => scoringApi.data || [], [scoringApi.data]);
@@ -351,9 +396,14 @@ export const ProcessesTab = ({ divisionId }) => {
             {processes.length} процессов · нажмите на процесс, точку на матрице или строку тепловой карты
           </p>
         </div>
-        <div className="relative sm:w-72">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Поиск процесса…" className="pl-9" />
+        <div className="flex gap-2">
+          <div className="relative flex-1 sm:w-72">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Поиск процесса…" className="pl-9" />
+          </div>
+          <Button variant="outline" onClick={() => setEditing({})} data-testid="add-process-btn">
+            <Plus /> Процесс
+          </Button>
         </div>
       </div>
 
@@ -373,6 +423,8 @@ export const ProcessesTab = ({ divisionId }) => {
                   setExpanded(expanded === process.id ? null : process.id);
                   setSelectedName(process.name);
                 }}
+                onEdit={setEditing}
+                onDelete={setDeleting}
               />
             );
           })}
@@ -401,6 +453,22 @@ export const ProcessesTab = ({ divisionId }) => {
           <ScoreHeatmap scoring={scoring} onSelect={select} selectedName={selectedScore?.process_name} />
         </Panel>
       )}
+
+      <ProcessEditorDialog
+        open={editing !== null}
+        onOpenChange={(open) => !open && setEditing(null)}
+        divisionId={divisionId}
+        process={editing?.id ? editing : null}
+        onSaved={afterChange}
+      />
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={`Удалить процесс «${deleting?.name}»?`}
+        description="Будут удалены его BPMN-схемы, скоринг и TO-BE модель."
+        onConfirm={confirmDelete}
+        busy={busy}
+      />
     </div>
   );
 };

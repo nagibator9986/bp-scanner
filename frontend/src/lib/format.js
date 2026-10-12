@@ -43,3 +43,19 @@ export const plural = (count, forms) => {
   if (n1 === 1) return forms[0];
   return forms[2];
 };
+
+/** Деньги: 12 500 000 ₸ → «12,5 млн ₸». */
+export const formatMoney = (value, currency = "₸") => {
+  if (value == null) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1e9) return `${formatNumber(value / 1e9, 1)} млрд ${currency}`;
+  if (abs >= 1e6) return `${formatNumber(value / 1e6, 1)} млн ${currency}`;
+  if (abs >= 1e3) return `${formatNumber(value / 1e3, 0)} тыс. ${currency}`;
+  return `${formatNumber(value, 0)} ${currency}`;
+};
+
+/** Токены: 51 779 → «51,8 тыс.». */
+export const formatTokens = (value) => {
+  if (value == null) return "—";
+  return value >= 1000 ? `${formatNumber(value / 1000, 1)} тыс.` : formatNumber(value, 0);
+};

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, ClipboardPaste, CloudOff, Loader2, Save } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, ClipboardPaste, CloudOff, Loader2, Save, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { AudioInput, DocExtractInput } from "@/components/AudioInput";
@@ -68,12 +68,55 @@ function SaveIndicator({ state, savedAt }) {
   return null;
 }
 
+function SuggestionsPanel({ suggestions, schema, answers, onAccept, onAcceptEmpty, onDismiss }) {
+  const questions = Object.fromEntries((schema || []).flatMap((section) => section.questions.map((q) => [q.id, q])));
+  const entries = Object.entries(suggestions).filter(([id]) => questions[id]);
+  const format = (value) => (typeof value === "boolean" ? (value ? "Да" : "Нет") : String(value));
+  return (
+    <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4" data-testid="suggestions-panel">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <Sparkles className="h-4 w-4 text-primary" /> Модель предложила ответы на {entries.length} вопросов по документам
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={onAcceptEmpty} data-testid="accept-empty-btn">
+            <Check /> Принять для пустых полей
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDismiss}>
+            <X /> Закрыть
+          </Button>
+        </div>
+      </div>
+      <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+        {entries.map(([id, value]) => (
+          <div key={id} className="rounded-lg border border-border bg-card p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-muted-foreground">{questions[id].text}</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{format(value)}</p>
+                {isAnswered(answers[id]) && (
+                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">Сейчас: {format(answers[id])}</p>
+                )}
+              </div>
+              <Button size="sm" variant="outline" className="shrink-0" onClick={() => onAccept(id, value)}>
+                {isAnswered(answers[id]) ? "Заменить" : "Принять"}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export const QuestionnaireTab = ({ divisionId, onSaved }) => {
   const [schema, setSchema] = useState(null);
   const [answers, setAnswers] = useState({});
   const [loadError, setLoadError] = useState(null);
   const [step, setStep] = useState(0);
   const [saveState, setSaveState] = useState("idle");
+  const [suggestions, setSuggestions] = useState(null);
+  const [suggesting, setSuggesting] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
   const answersRef = useRef(answers);
   const dirtyRef = useRef(false);
@@ -147,6 +190,33 @@ export const QuestionnaireTab = ({ divisionId, onSaved }) => {
   };
 
   const setAnswer = (id, value) => updateAnswers((prev) => ({ ...prev, [id]: value }));
+
+  const requestSuggestions = async () => {
+    setSuggesting(true);
+    try {
+      const { data } = await api.post(`/divisions/${divisionId}/questionnaire/suggest`);
+      if (!data.count) toast.info("В документах не нашлось ответов на вопросы анкеты");
+      setSuggestions(data.count ? data.suggestions : null);
+    } catch (err) {
+      toast.error(errorMessage(err, "Не удалось получить подсказки"));
+    } finally {
+      setSuggesting(false);
+    }
+  };
+  const acceptSuggestion = (id, value) => {
+    setAnswer(id, value);
+    setSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return Object.keys(next).length ? next : null;
+    });
+  };
+  const acceptEmpty = () => {
+    const accepted = Object.entries(suggestions).filter(([id]) => !isAnswered(answersRef.current[id]));
+    updateAnswers((prev) => ({ ...prev, ...Object.fromEntries(accepted) }));
+    toast.success(`Заполнено полей: ${accepted.length}`);
+    setSuggestions(null);
+  };
   const appendText = (id, text) => updateAnswers((prev) => ({ ...prev, [id]: `${prev[id] || ""}${text}`.trim() }));
 
   const visibleSections = useMemo(() => (schema || []).filter((s) => sectionVisible(s, answers)), [schema, answers]);
@@ -175,8 +245,25 @@ export const QuestionnaireTab = ({ divisionId, onSaved }) => {
           <h2 className="text-xl font-semibold text-foreground">Анкета подразделения</h2>
           <p className="mt-1 text-sm text-muted-foreground">Ответы сохраняются автоматически. Можно диктовать голосом или извлекать текст из документов.</p>
         </div>
-        <SaveIndicator state={saveState} savedAt={savedAt} />
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <Button variant="outline" size="sm" onClick={requestSuggestions} disabled={suggesting} data-testid="suggest-answers-btn">
+            {suggesting ? <Loader2 className="animate-spin" /> : <Sparkles />}
+            {suggesting ? "Модель читает документы…" : "Заполнить по документам"}
+          </Button>
+          <SaveIndicator state={saveState} savedAt={savedAt} />
+        </div>
       </div>
+
+      {suggestions && (
+        <SuggestionsPanel
+          suggestions={suggestions}
+          schema={schema}
+          answers={answers}
+          onAccept={acceptSuggestion}
+          onAcceptEmpty={acceptEmpty}
+          onDismiss={() => setSuggestions(null)}
+        />
+      )}
 
       <div className="rounded-xl border border-border bg-card/70 p-4">
         <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">

@@ -82,3 +82,17 @@ export const scoreColor = (value) => {
   const hue = 145 - ((v - 1) / 9) * 145; // зелёный → красный
   return `hsl(${hue} 70% 45%)`;
 };
+
+export const INITIATIVE_STATUSES = {
+  new: { label: "Новая", color: "#64748b", text: "text-muted-foreground", bg: "bg-slate-500/10" },
+  accepted: { label: "Принята", color: "#3b82f6", text: "text-blue-500", bg: "bg-blue-500/10" },
+  in_progress: { label: "В работе", color: "#f59e0b", text: "text-amber-500", bg: "bg-amber-500/10" },
+  done: { label: "Внедрена", color: "#10b981", text: "text-emerald-500", bg: "bg-emerald-500/10" },
+  rejected: { label: "Отклонена", color: "#ef4444", text: "text-red-500", bg: "bg-red-500/10" },
+};
+
+export const ANALYSIS_MODES = {
+  full: { label: "Полный анализ", hint: "Заново выявить процессы по анкете и документам и пересчитать всё" },
+  scoring: { label: "Пересчитать скоринг и рекомендации", hint: "По текущим процессам, включая ручные правки" },
+  recommendations: { label: "Пересчитать рекомендации, TO-BE и n8n", hint: "По текущим процессам и скорингу" },
+};

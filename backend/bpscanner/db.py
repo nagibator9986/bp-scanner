@@ -72,3 +72,5 @@ async def ensure_indexes() -> None:
     await db.prompts.create_index("step_name", unique=True)
     await db.prompt_history.create_index("step_name")
     await db.knowledge_base.create_index("category")
+    await db.analysis_runs.create_index("division_id")
+    await db.document_digests.create_index("key", unique=True)

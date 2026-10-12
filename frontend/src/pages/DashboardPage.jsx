@@ -1,17 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   Building2,
+  Clock,
+  FileSpreadsheet,
   Gauge,
   GitBranch,
   Lightbulb,
+  ListChecks,
+  Loader2,
   Plus,
   Rocket,
   TrendingUp,
   Users,
-  Workflow,
+  Wallet,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   Bar,
   BarChart,
@@ -45,8 +50,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { useApi } from "@/hooks/useApi";
 import { useChartTheme } from "@/hooks/useChartTheme";
-import { CATEGORIES, SCORE_FIELDS, potentialColor } from "@/lib/constants";
-import { formatNumber, plural, truncate } from "@/lib/format";
+import { downloadFile, errorMessage } from "@/lib/api";
+import { CATEGORIES, INITIATIVE_STATUSES, SCORE_FIELDS, potentialColor } from "@/lib/constants";
+import { formatMoney, formatNumber, plural, truncate } from "@/lib/format";
 
 const STATUS_COLORS = { completed: "#10b981", in_progress: "#f59e0b", error: "#ef4444", not_started: "#64748b" };
 const STATUS_LABELS = { completed: "Завершён", in_progress: "В процессе", error: "Ошибка", not_started: "Не начат" };
@@ -206,6 +212,107 @@ function DivisionsComparison({ divisions }) {
   );
 }
 
+function InitiativesPipeline({ data }) {
+  const rows = (data || []).map((item) => ({ ...item, ...(INITIATIVE_STATUSES[item.status] || INITIATIVE_STATUSES.new) }));
+  const total = rows.reduce((sum, item) => sum + item.count, 0);
+  if (!total) return <p className="py-16 text-center text-sm text-muted-foreground">Инициатив пока нет</p>;
+  const active = rows.filter((r) => ["accepted", "in_progress", "done"].includes(r.status)).reduce((sum, r) => sum + r.count, 0);
+  return (
+    <div className="space-y-4" data-testid="initiatives-pipeline">
+      <div className="flex h-3 overflow-hidden rounded-full bg-secondary">
+        {rows
+          .filter((r) => r.count > 0)
+          .map((r) => (
+            <div key={r.status} style={{ width: `${(r.count / total) * 100}%`, background: r.color }} title={`${r.label}: ${r.count}`} />
+          ))}
+      </div>
+      <ul className="space-y-2">
+        {rows.map((r) => (
+          <li key={r.status} className="flex items-center justify-between gap-3 text-sm">
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: r.color }} /> {r.label}
+            </span>
+            <span className="flex items-baseline gap-3 tabular-nums">
+              {r.fte > 0 && <span className="text-xs text-muted-foreground">{formatNumber(r.fte, 1)} FTE</span>}
+              <span className="w-8 text-right font-semibold text-foreground">{r.count}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-muted-foreground">
+        В портфеле (принято, в работе, внедрено): {active} из {total} · {Math.round((active / total) * 100)}%
+      </p>
+    </div>
+  );
+}
+
+function SavingsByDivision({ divisions, currency }) {
+  const chart = useChartTheme();
+  const rows = divisions
+    .filter((d) => d.saved_hours_month > 0)
+    .sort((a, b) => b.saved_hours_month - a.saved_hours_month)
+    .slice(0, 10)
+    .map((d) => ({
+      name: truncate(d.name, 22),
+      fullName: d.name,
+      hours: d.saved_hours_month,
+      money: d.saved_money_year,
+      fte: d.saved_fte,
+    }));
+  if (!rows.length) {
+    return (
+      <p className="py-16 text-center text-sm text-muted-foreground">
+        Появится, когда у процессов будут объёмы и длительность шагов — их можно уточнить в редакторе процессов
+      </p>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(200, rows.length * 34)}>
+      <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 24, top: 4, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} horizontal={false} />
+        <XAxis type="number" stroke={chart.axis} fontSize={11} tickFormatter={(v) => formatNumber(v, 0)} />
+        <YAxis type="category" dataKey="name" stroke={chart.axis} fontSize={11} width={170} />
+        <Tooltip
+          cursor={{ fill: chart.cursor }}
+          content={
+            <ChartTooltip
+              formatter={(value, name, item) => {
+                const row = item?.payload || {};
+                const extra = [row.fte != null && `${formatNumber(row.fte, 1)} FTE`, row.money != null && `${formatMoney(row.money, currency)}/год`]
+                  .filter(Boolean)
+                  .join(" · ");
+                return `${formatNumber(value, 0)} ч/мес${extra ? ` (${extra})` : ""}`;
+              }}
+              labelFormatter={(l, p) => p?.[0]?.payload?.fullName || l}
+            />
+          }
+        />
+        <Bar dataKey="hours" name="Высвобождается" fill="#10b981" radius={[0, 4, 4, 0]} barSize={18} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function PortfolioExportButton() {
+  const [busy, setBusy] = useState(false);
+  const exportPortfolio = async () => {
+    setBusy(true);
+    try {
+      const name = await downloadFile("/dashboard/export/xlsx", "portfolio.xlsx");
+      toast.success(`Выгрузка скачана: ${name}`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Не удалось выгрузить портфель"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button variant="outline" onClick={exportPortfolio} disabled={busy} data-testid="portfolio-export-btn">
+      {busy ? <Loader2 className="animate-spin" /> : <FileSpreadsheet />} Excel
+    </Button>
+  );
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { data, error, loading, reload } = useApi("/dashboard");
@@ -228,6 +335,9 @@ export default function DashboardPage() {
 
   const divisions = data.divisions || [];
   const hasAnalytics = (data.top_processes || []).length > 0;
+  const economics = data.economics || {};
+  const currency = economics.currency || "₸";
+  const statusCounts = Object.fromEntries((data.initiatives_by_status || []).map((item) => [item.status, item.count]));
   const createButton = (
     <Button onClick={() => navigate("/divisions?create=1")} data-testid="create-division-from-dashboard-btn">
       <Plus /> Новое подразделение
@@ -236,7 +346,16 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 p-6 md:p-8" data-testid="dashboard-page">
-      <PageHeader title="Дашборд" description="Портфельный обзор анализа и потенциала автоматизации" actions={createButton} />
+      <PageHeader
+        title="Дашборд"
+        description="Портфельный обзор анализа и потенциала автоматизации"
+        actions={
+          <>
+            {hasAnalytics && <PortfolioExportButton />}
+            {createButton}
+          </>
+        }
+      />
 
       {divisions.length === 0 ? (
         <EmptyState
@@ -249,11 +368,27 @@ export default function DashboardPage() {
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <StatCard icon={Building2} label="Подразделения" value={data.total_divisions} hint={`${data.analyzed_divisions} проанализировано`} />
-            <StatCard icon={GitBranch} label="Процессы" value={data.total_processes} accent="text-blue-500" />
+            <StatCard icon={GitBranch} label="Процессы" value={data.total_processes} hint={`n8n workflows: ${data.total_workflows || 0}`} accent="text-blue-500" />
             <StatCard icon={Gauge} label="Потенциал" value={data.avg_automation_potential != null ? `${data.avg_automation_potential}%` : "—"} hint="средний индекс" accent="text-amber-500" />
-            <StatCard icon={Lightbulb} label="Рекомендации" value={data.total_recommendations} accent="text-emerald-500" />
-            <StatCard icon={Users} label="Экономия" value={`${formatNumber(data.total_fte_savings)} FTE`} hint="оценка модели" accent="text-emerald-500" />
-            <StatCard icon={Workflow} label="n8n workflows" value={data.total_workflows} accent="text-purple-500" />
+            <StatCard
+              icon={Lightbulb}
+              label="Рекомендации"
+              value={data.total_recommendations}
+              hint={`в работе ${statusCounts.in_progress || 0} · внедрено ${statusCounts.done || 0}`}
+              accent="text-emerald-500"
+            />
+            <StatCard
+              icon={Clock}
+              label="Высвобождается"
+              value={economics.saved_hours_month != null ? `${formatNumber(economics.saved_hours_month, 0)} ч/мес` : "—"}
+              hint={economics.saved_fte != null ? `≈ ${formatNumber(economics.saved_fte, 1)} FTE по расчёту` : "нет данных об объёмах"}
+              accent="text-emerald-500"
+            />
+            {economics.saved_money_year != null ? (
+              <StatCard icon={Wallet} label="Эффект в год" value={formatMoney(economics.saved_money_year, currency)} hint={`при ${formatNumber(economics.hourly_cost, 0)} ${currency}/ч`} accent="text-emerald-500" />
+            ) : (
+              <StatCard icon={Users} label="Экономия" value={`${formatNumber(data.total_fte_savings)} FTE`} hint="оценка модели" accent="text-emerald-500" />
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
@@ -316,6 +451,22 @@ export default function DashboardPage() {
             </Panel>
           </div>
 
+          {hasAnalytics && (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+              <Panel
+                className="xl:col-span-7"
+                title="Высвобождение рабочего времени"
+                description="Разница трудозатрат AS-IS и TO-BE, часов в месяц"
+                icon={Clock}
+              >
+                <SavingsByDivision divisions={divisions} currency={currency} />
+              </Panel>
+              <Panel className="xl:col-span-5" title="Портфель инициатив" description="Статусы рекомендаций по всем подразделениям" icon={ListChecks}>
+                <InitiativesPipeline data={data.initiatives_by_status} />
+              </Panel>
+            </div>
+          )}
+
           <Panel title="Подразделения" icon={Building2} actions={<Button variant="ghost" size="sm" onClick={() => navigate("/divisions")}>Все <ArrowRight /></Button>}>
             <div className="-mx-2 overflow-x-auto">
               <table className="w-full min-w-[720px] text-sm">
@@ -326,7 +477,7 @@ export default function DashboardPage() {
                     <th className="px-2 py-2 font-medium w-40">Анкета</th>
                     <th className="px-2 py-2 font-medium text-right">Документы</th>
                     <th className="px-2 py-2 font-medium text-right">Процессы</th>
-                    <th className="px-2 py-2 font-medium text-right">FTE</th>
+                    <th className="px-2 py-2 font-medium text-right">Высвобождение</th>
                     <th className="px-2 py-2 font-medium w-40">Потенциал</th>
                   </tr>
                 </thead>
@@ -350,7 +501,18 @@ export default function DashboardPage() {
                       </td>
                       <td className="px-2 py-3 text-right tabular-nums text-muted-foreground">{division.documents_count}</td>
                       <td className="px-2 py-3 text-right tabular-nums text-foreground">{division.processes_count || 0}</td>
-                      <td className="px-2 py-3 text-right tabular-nums text-emerald-500">{division.fte_savings_total ? formatNumber(division.fte_savings_total) : "—"}</td>
+                      <td className="px-2 py-3 text-right tabular-nums text-emerald-500">
+                        {division.saved_hours_month ? (
+                          <>
+                            {formatNumber(division.saved_hours_month, 0)} ч/мес
+                            {division.saved_fte != null && <span className="block text-xs text-muted-foreground">{formatNumber(division.saved_fte, 1)} FTE</span>}
+                          </>
+                        ) : division.fte_savings_total ? (
+                          `${formatNumber(division.fte_savings_total)} FTE`
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="px-2 py-3">
                         {division.avg_automation_potential != null ? (
                           <Meter

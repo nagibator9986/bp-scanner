@@ -1,11 +1,13 @@
 """Поддельный OpenAI-совместимый сервер (как vLLM с Qwen) для тестов конвейера."""
 import json
+import re
 import socket
 import threading
 import time
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 PROCESSES = [
     {
@@ -14,6 +16,7 @@ PROCESSES = [
         "owner": "Начальник отдела",
         "trigger": "Поступление заявки",
         "frequency": "Ежедневно",
+        "volume_per_month": 600,
         "roles": ["Операционист", "Контролёр"],
         "systems": ["СЭД", "АБИС"],
         "pain_points": ["Ручной ввод данных"],
@@ -21,7 +24,7 @@ PROCESSES = [
             {"name": "Получить заявку", "role": "Операционист", "system": "СЭД", "type": "task", "manual": True, "duration_min": 5},
             {"name": "Внести данные в АБИС", "role": "Операционист", "system": "АБИС", "type": "task", "manual": True, "duration_min": 15},
             {"name": "Данные корректны?", "role": "Контролёр", "type": "decision"},
-            {"name": "Подтвердить регистрацию", "role": "Контролёр", "system": "АБИС", "type": "task"},
+            {"name": "Подтвердить регистрацию", "role": "Контролёр", "system": "АБИС", "type": "task", "duration_min": 4},
         ],
     },
     {
@@ -55,7 +58,7 @@ TOBE = [
      "removed_steps": ["Внести данные в АБИС"], "automated_steps": ["Перенести данные в АБИС"],
      "new_process": {"name": "Регистрация заявок (TO-BE)", "steps": [
          {"name": "Получить заявку", "role": "Операционист", "system": "СЭД"},
-         {"name": "Перенести данные в АБИС", "role": "Робот n8n", "system": "n8n"},
+         {"name": "Перенести данные в АБИС", "role": "Робот n8n", "system": "n8n", "automated": True},
          {"name": "Подтвердить регистрацию", "role": "Контролёр"},
      ]},
      "expected_effect": "Сокращение времени на 60%", "time_reduction_percent": 60, "risks": ["Изменение API СЭД"]},
@@ -83,6 +86,15 @@ class FakeLLM:
         self.port = None
         self.server = None
         self.delay = 0.0
+        # Имитация окна модели как в vLLM: max_model_len в /v1/models и ошибка 400 при переполнении
+        self.context_limit: int | None = None
+        self.report_context = True
+        self.rejected: list[dict] = []
+        self.digest_reply = None  # своя функция ответа на конспектирование (user -> str)
+
+    @staticmethod
+    def count_tokens(text: str) -> int:
+        return len(text) // 3 + 1  # «токенизатор» сервера: ~3 символа на токен
 
     def reply_for(self, system: str, user: str) -> str:
         if "BROKEN" in user:
@@ -92,8 +104,15 @@ class FakeLLM:
         if "Выяви ключевые бизнес-процессы" in user:
             # Qwen3 без reasoning-parser: блок рассуждений + JSON
             return "<think>Анализирую анкету...</think>\n" + json.dumps(PROCESSES, ensure_ascii=False)
+        if "Фрагмент документа" in user:
+            if self.digest_reply:
+                return self.digest_reply(user)
+            return "- Заявки регистрируются вручную в АБИС (из конспекта документа)"
+        if "Предложи ответы на вопросы" in user:
+            return json.dumps({"dept_function": "Обслуживание клиентов МСБ", "has_approvals": "да",
+                               "process_frequency": "ежедневно", "unknown_question": "x", "kpis": ""}, ensure_ascii=False)
         if "Оцени процессы" in user:
-            return "Вот оценка:\n```json\n" + json.dumps(SCORING, ensure_ascii=False) + "\n```"
+            return "Вот оценка:\n```json\n" + json.dumps(self.scoring_for(user), ensure_ascii=False) + "\n```"
         if "Сформируй рекомендации" in user:
             return json.dumps({"items": RECOMMENDATIONS}, ensure_ascii=False)
         if "TO-BE" in user:
@@ -103,18 +122,47 @@ class FakeLLM:
             return text[:-1] + ",]"  # висячая запятая — должна быть исправлена парсером
         return "[]"
 
+    @staticmethod
+    def scoring_for(user: str) -> list[dict]:
+        """Оценки для процессов из промпта; при нескольких процессах «забывает» последний,
+        чтобы проверять дозапрос пропущенных процессов."""
+        processes = next((json.loads(line) for line in user.splitlines() if line.startswith('[{"name"')), [])
+        key = lambda name: re.sub(r"\W+", " ", name.lower().replace("ё", "е")).strip()  # noqa: E731
+        known = {key(s["process_name"]): s for s in SCORING}
+        result = [
+            known.get(key(p["name"])) or {"process_name": p["name"], "complexity": 5, "manual_effort": 6, "system_fragmentation": 5,
+                                          "approval_burden": 4, "ai_suitability": 5, "automation_readiness": 6}
+            for p in processes
+        ]
+        return result[:-1] if len(result) > 1 else result
+
     def build_app(self) -> FastAPI:
         app = FastAPI()
+
+        @app.get("/v1/models")
+        async def models():
+            if not (self.context_limit and self.report_context):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            return {"object": "list", "data": [{"id": "qwen-test", "object": "model", "owned_by": "vllm", "max_model_len": self.context_limit}]}
 
         @app.post("/v1/chat/completions")
         async def completions(request: Request):
             body = await request.json()
-            self.requests.append(body)
-            if self.delay:
-                time.sleep(self.delay)
             messages = body.get("messages", [])
             system = next((m["content"] for m in messages if m["role"] == "system"), "")
             user = next((m["content"] for m in messages if m["role"] == "user"), "")
+            prompt_tokens = self.count_tokens(system) + self.count_tokens(user)
+            if self.context_limit:
+                completion = body.get("max_tokens") or 0
+                if prompt_tokens + completion > self.context_limit:
+                    self.rejected.append(body)
+                    message = (f"This model's maximum context length is {self.context_limit} tokens. However, you requested "
+                               f"{prompt_tokens + completion} tokens ({prompt_tokens} in the messages, {completion} in the completion). "
+                               "Please reduce the length of the messages or completion.")
+                    return JSONResponse({"object": "error", "message": message, "type": "BadRequestError", "code": 400}, status_code=400)
+            self.requests.append(body)
+            if self.delay:
+                time.sleep(self.delay)
             return {
                 "id": "chatcmpl-test",
                 "object": "chat.completion",
@@ -125,7 +173,7 @@ class FakeLLM:
                     "message": {"role": "assistant", "content": self.reply_for(system, user)},
                     "finish_reason": "stop",
                 }],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+                "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 10, "total_tokens": prompt_tokens + 10},
             }
 
         return app

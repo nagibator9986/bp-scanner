@@ -5,12 +5,15 @@ import {
   ArrowLeft,
   BarChart3,
   Building2,
+  Calculator,
+  ChevronDown,
   ClipboardList,
   FileText,
   GitBranch,
   Lightbulb,
   Loader2,
   Play,
+  RefreshCw,
   Workflow,
 } from "lucide-react";
 
@@ -19,16 +22,19 @@ import { ErrorState, LoadingState, StatusBadge } from "@/components/common";
 import { ExportReportButton } from "@/components/ExportReportButton";
 import { BpmnTab } from "@/components/tabs/BpmnTab";
 import { DocumentsTab } from "@/components/tabs/DocumentsTab";
+import { EconomicsTab } from "@/components/tabs/EconomicsTab";
 import { N8nTab } from "@/components/tabs/N8nTab";
 import { OverviewTab } from "@/components/tabs/OverviewTab";
 import { ProcessesTab } from "@/components/tabs/ProcessesTab";
 import { QuestionnaireTab } from "@/components/tabs/QuestionnaireTab";
 import { RecommendationsTab } from "@/components/tabs/RecommendationsTab";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useApi } from "@/hooks/useApi";
 import api, { errorMessage } from "@/lib/api";
+import { ANALYSIS_MODES } from "@/lib/constants";
 
 const TABS = [
   { value: "overview", icon: Building2, label: "Обзор" },
@@ -37,6 +43,7 @@ const TABS = [
   { value: "processes", icon: GitBranch, label: "Процессы", results: true },
   { value: "bpmn", icon: Workflow, label: "BPMN", results: true },
   { value: "recommendations", icon: Lightbulb, label: "Рекомендации", results: true },
+  { value: "economics", icon: Calculator, label: "Экономика", results: true },
   { value: "n8n", icon: BarChart3, label: "n8n", results: true },
 ];
 
@@ -105,11 +112,11 @@ export default function DivisionDetailPage() {
     };
   }, [running, fetchStatus]);
 
-  const startAnalysis = async () => {
+  const startAnalysis = async (mode = "full") => {
     setStarting(true);
     try {
-      await api.post(`/divisions/${id}/analyze`);
-      toast.info("Анализ запущен");
+      await api.post(`/divisions/${id}/analyze`, { mode });
+      toast.info(`${ANALYSIS_MODES[mode].label}: запущено`);
       await fetchStatus();
     } catch (err) {
       toast.error(errorMessage(err, "Не удалось запустить анализ"));
@@ -135,10 +142,32 @@ export default function DivisionDetailPage() {
   const runDisabledReason = !hasInput ? "Заполните анкету или загрузите документы" : null;
   const currentStatus = status?.status || division.analysis_status;
 
-  const runButton = (
-    <Button onClick={startAnalysis} disabled={running || starting || Boolean(runDisabledReason)} data-testid="start-analysis-btn">
-      {running || starting ? <Loader2 className="animate-spin" /> : <Play />}
-      {running ? "Анализ идёт…" : hasResults ? "Перезапустить анализ" : "Запустить анализ"}
+  const busy = running || starting;
+  const runButton = hasResults ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button disabled={busy || Boolean(runDisabledReason)} data-testid="start-analysis-btn">
+          {busy ? <Loader2 className="animate-spin" /> : <Play />}
+          {running ? "Анализ идёт…" : "Перезапустить"}
+          <ChevronDown className="opacity-70" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        {Object.entries(ANALYSIS_MODES).map(([mode, config], index) => (
+          <div key={mode}>
+            {index === 1 && <DropdownMenuSeparator />}
+            <DropdownMenuItem onClick={() => startAnalysis(mode)} className="cursor-pointer flex-col items-start gap-0.5" data-testid={`run-mode-${mode}`}>
+              <span className="font-medium">{config.label}</span>
+              <span className="text-xs text-muted-foreground">{config.hint}</span>
+            </DropdownMenuItem>
+          </div>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : (
+    <Button onClick={() => startAnalysis("full")} disabled={busy || Boolean(runDisabledReason)} data-testid="start-analysis-btn">
+      {busy ? <Loader2 className="animate-spin" /> : <Play />}
+      {running ? "Анализ идёт…" : "Запустить анализ"}
     </Button>
   );
 
@@ -178,7 +207,18 @@ export default function DivisionDetailPage() {
 
       {running && <AnalysisRunning status={status} />}
       {!running && currentStatus === "error" && status && (
-        <AnalysisError status={status} onRetry={startAnalysis} canRun={!runDisabledReason} />
+        <AnalysisError status={status} onRetry={() => startAnalysis(status.mode || "full")} canRun={!runDisabledReason} />
+      )}
+      {!running && division.results_outdated && hasResults && (
+        <div className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between" data-testid="results-outdated">
+          <p className="text-sm text-foreground">
+            Процессы изменены вручную. Чтобы скоринг, рекомендации, TO-BE и экономика учитывали правки, пересчитайте их — процессы и
+            схемы AS-IS сохранятся.
+          </p>
+          <Button size="sm" onClick={() => startAnalysis("scoring")} disabled={starting} className="shrink-0" data-testid="rerun-scoring-btn">
+            <RefreshCw /> Пересчитать
+          </Button>
+        </div>
       )}
       {!running && currentStatus === "completed" && <AnalysisWarnings warnings={status?.warnings} />}
 
@@ -208,13 +248,16 @@ export default function DivisionDetailPage() {
           <DocumentsTab divisionId={id} onChange={(count) => setDivision((prev) => ({ ...prev, documents_count: count }))} />
         </TabsContent>
         <TabsContent value="processes">
-          <ProcessesTab key={`processes-${resultsVersion}`} divisionId={id} />
+          <ProcessesTab key={`processes-${resultsVersion}`} divisionId={id} onChanged={() => reload({ silent: true })} />
         </TabsContent>
         <TabsContent value="bpmn">
           <BpmnTab key={`bpmn-${resultsVersion}`} divisionId={id} />
         </TabsContent>
         <TabsContent value="recommendations">
           <RecommendationsTab key={`recs-${resultsVersion}`} divisionId={id} />
+        </TabsContent>
+        <TabsContent value="economics">
+          <EconomicsTab key={`economics-${resultsVersion}`} divisionId={id} onEditProcesses={() => setTab("processes")} />
         </TabsContent>
         <TabsContent value="n8n">
           <N8nTab key={`n8n-${resultsVersion}`} divisionId={id} />

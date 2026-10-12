@@ -11,8 +11,10 @@ from fastapi.responses import FileResponse
 
 from ..analytics import accessible_divisions_query, enrich_divisions
 from ..config import settings
+from ..context import evenly_spaced, plan_documents
 from ..db import RESULT_COLLECTIONS, db, now_iso
 from ..documents import ALLOWED_EXTENSIONS, STORED_TEXT_LIMIT, extract_text_from_file
+from ..llm import LLMClient, LLMError, load_llm_config
 from ..pipeline import analysis_status
 from ..questionnaire import QUESTIONNAIRE_SCHEMA, questionnaire_completion, sanitize_answers
 from ..reports import content_disposition
@@ -216,6 +218,34 @@ async def list_documents(division_id: str, user=Depends(get_current_user)):
     await get_division_for(user, division_id)
     documents = await db.documents.find({"division_id": division_id}, {"_id": 0, "file_path": 0}).sort("uploaded_at", 1).to_list(500)
     return [_public_document(d) for d in documents]
+
+
+@router.get("/divisions/{division_id}/documents/budget")
+async def documents_budget(division_id: str, user=Depends(get_current_user)):
+    """Помещаются ли документы в контекстное окно модели и сколько потребуется конспектирования."""
+    division = await get_division_for(user, division_id)
+    config = await load_llm_config()
+    if not config.configured:
+        return {"configured": False}
+    try:
+        plan = await plan_documents(division, LLMClient(config))
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail=exc.message) from exc
+    chunks = sum(len(evenly_spaced(len(plan.chunks[i]), max(plan.quotas[i], 1))) for i in plan.to_digest)
+    return {
+        "configured": True,
+        "context_tokens": plan.context,
+        "context_source": plan.context_source,
+        "documents_tokens": sum(plan.sizes),
+        "budget_tokens": plan.target,
+        "fits": plan.fits,
+        "digest_documents": len(plan.to_digest),
+        "digest_chunks": chunks,
+        "documents": [
+            {"name": name, "tokens": size, "digest": index in plan.to_digest}
+            for index, ((name, _), size) in enumerate(zip(plan.documents, plan.sizes))
+        ],
+    }
 
 
 @router.get("/divisions/{division_id}/documents/{doc_id}/download")

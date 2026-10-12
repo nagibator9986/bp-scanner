@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Circle, Loader2, MinusCircle, RotateCcw } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Circle, Loader2, MinusCircle, Recycle, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -13,6 +13,7 @@ const STATE_ICON = {
   error: { icon: AlertCircle, className: "text-red-500" },
   skipped: { icon: MinusCircle, className: "text-amber-500" },
   pending: { icon: Circle, className: "text-muted-foreground/40" },
+  reused: { icon: Recycle, className: "text-muted-foreground" },
 };
 
 function useElapsed(startedAt, active) {
@@ -37,7 +38,10 @@ export function AnalysisSteps({ steps }) {
         return (
           <li key={step.key} className="flex items-center gap-2 text-xs">
             <Icon className={cn("h-4 w-4 shrink-0", className)} />
-            <span className={cn(state === "pending" ? "text-muted-foreground" : "text-foreground", state === "running" && "font-semibold")}>
+            <span
+              className={cn(state === "pending" || state === "reused" ? "text-muted-foreground" : "text-foreground", state === "running" && "font-semibold")}
+              title={state === "reused" ? "Используются текущие результаты" : undefined}
+            >
               {step.title}
             </span>
           </li>

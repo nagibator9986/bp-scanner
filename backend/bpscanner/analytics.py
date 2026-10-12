@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 from .config import settings
 from .db import db, parse_iso
-from .normalize import CATEGORY_LABELS, SCORE_FIELDS
+from .economics import fte, load_economics_settings, money
+from .normalize import CATEGORY_LABELS, INITIATIVE_STATUSES, SCORE_FIELDS
 
 SCORE_LABELS = {
     "complexity": "Сложность",
@@ -117,8 +118,37 @@ async def build_dashboard(user: dict) -> dict:
     )[:10]
 
     quick_wins = await db.recommendations.find(
-        {"division_id": {"$in": ids}, "complexity": "low"}, {"_id": 0}
+        {"division_id": {"$in": ids}, "complexity": "low", "status": {"$nin": ["done", "rejected"]}}, {"_id": 0}
     ).sort([("priority", 1), ("estimated_fte_savings", -1)]).to_list(5)
+
+    statuses_count = {key: {"count": 0, "fte": 0.0} for key in INITIATIVE_STATUSES}
+    for rec in await db.recommendations.find(
+        {"division_id": {"$in": ids}}, {"_id": 0, "status": 1, "estimated_fte_savings": 1}
+    ).to_list(None):
+        key = rec.get("status") if rec.get("status") in statuses_count else "new"  # старые записи без статуса
+        statuses_count[key]["count"] += 1
+        statuses_count[key]["fte"] += rec.get("estimated_fte_savings") or 0
+    initiatives_by_status = [
+        {"status": key, "label": label, "count": statuses_count[key]["count"], "fte": round(statuses_count[key]["fte"], 1)}
+        for key, label in INITIATIVE_STATUSES.items()
+    ]
+
+    eco = await load_economics_settings()
+    processes = await db.processes.find({"division_id": {"$in": ids}}, {"_id": 0, "economics": 1}).to_list(10000)
+    hours_asis = [p["economics"]["hours_per_month"] for p in processes if (p.get("economics") or {}).get("hours_per_month") is not None]
+    saved_total = sum(d.get("saved_hours_month") or 0 for d in divisions) if any(d.get("saved_hours_month") for d in divisions) else None
+    for division in divisions:
+        division["saved_fte"] = fte(division.get("saved_hours_month"), eco)
+        division["saved_money_year"] = money(division.get("saved_hours_month"), eco)
+    economics = {
+        "hours_per_month": round(sum(hours_asis), 1) if hours_asis else None,
+        "saved_hours_month": round(saved_total, 1) if saved_total is not None else None,
+        "saved_fte": fte(saved_total, eco),
+        "saved_money_year": money(saved_total, eco),
+        "currency": eco["currency"],
+        "hourly_cost": eco["hourly_cost"],
+        "fte_hours_month": eco["fte_hours_month"],
+    }
 
     total_fte = sum(row.get("fte", 0) or 0 for row in by_category.values())
     return {
@@ -143,6 +173,8 @@ async def build_dashboard(user: dict) -> dict:
             }
             for key, label in CATEGORY_LABELS.items()
         ],
+        "initiatives_by_status": initiatives_by_status,
+        "economics": economics,
         "recommendations_by_complexity": [
             {"complexity": key, "label": label, "count": by_complexity.get(key, 0)}
             for key, label in COMPLEXITY_LABELS.items()

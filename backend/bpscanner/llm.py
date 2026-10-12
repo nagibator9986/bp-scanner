@@ -6,6 +6,7 @@
 import asyncio
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -28,6 +29,76 @@ class LLMError(Exception):
         self.detail = detail
 
 
+class ContextOverflowError(LLMError):
+    """Запрос не поместился в контекстное окно модели."""
+
+    def __init__(self, message: str, detail: str | None = None,
+                 context_tokens: int | None = None, prompt_tokens: int | None = None):
+        super().__init__(message, detail)
+        self.context_tokens = context_tokens
+        self.prompt_tokens = prompt_tokens
+
+
+# ============== Размер промпта в токенах ==============
+
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+# Консервативная оценка для токенизаторов Qwen/Llama/GPT: кириллица дороже латиницы и JSON
+CYRILLIC_CHARS_PER_TOKEN = 2.6
+OTHER_CHARS_PER_TOKEN = 3.4
+
+
+def estimate_tokens(text: str | None, ratio: float = 1.0) -> int:
+    """Оценка числа токенов текста; ratio — поправка, выученная по ответам сервера."""
+    if not text:
+        return 0
+    cyrillic = len(_CYRILLIC_RE.findall(text))
+    other = len(text) - cyrillic
+    return math.ceil((cyrillic / CYRILLIC_CHARS_PER_TOKEN + other / OTHER_CHARS_PER_TOKEN) * ratio)
+
+
+_OVERFLOW_MARKERS = (
+    "maximum context length", "context length", "context_length", "context window", "max_model_len",
+    "contextwindowexceeded", "too many tokens", "prompt is too long", "input is too long",
+    "reduce the length", "must be <=",
+)
+_CONTEXT_PATTERNS = (
+    re.compile(r"maximum context length is (\d+)", re.I),
+    re.compile(r"context length \((\d+) tokens?\)", re.I),
+    re.compile(r"context (?:length|window) of (\d+)", re.I),
+    re.compile(r"max_model_len[^\d]{0,20}(\d+)", re.I),
+    re.compile(r"must be <= (\d+)", re.I),
+)
+_PROMPT_PATTERNS = (
+    re.compile(r"\((\d+) in the messages", re.I),
+    re.compile(r"request has (\d+) input tokens", re.I),
+    re.compile(r"your request has (\d+) input", re.I),
+    re.compile(r"messages resulted in (\d+) tokens", re.I),
+    re.compile(r"input \((\d+) tokens?\)", re.I),
+    re.compile(r"given: (\d+) `?inputs`? tokens", re.I),
+    re.compile(r"prompt (?:has|contains|is) (\d+) tokens", re.I),
+)
+
+
+def parse_context_overflow(message: str) -> tuple[int | None, int | None] | None:
+    """Распознаёт ошибку переполнения контекста (vLLM, SGLang, TGI, OpenAI, LiteLLM).
+
+    Возвращает (окно модели, токенов во входе) — любое из значений может быть None —
+    или None, если ошибка не про контекст.
+    """
+    lowered = (message or "").lower()
+    if not any(marker in lowered for marker in _OVERFLOW_MARKERS):
+        return None
+
+    def first(patterns):
+        for pattern in patterns:
+            match = pattern.search(message)
+            if match:
+                return int(match.group(1))
+        return None
+
+    return first(_CONTEXT_PATTERNS), first(_PROMPT_PATTERNS)
+
+
 @dataclass
 class LLMConfig:
     provider: str
@@ -38,6 +109,7 @@ class LLMConfig:
     temperature: float = 0.2
     disable_thinking: bool = False
     json_mode: bool = False
+    context_tokens: int | None = None
     source: str = "db"
 
     @property
@@ -57,6 +129,7 @@ class LLMConfig:
             "temperature": self.temperature,
             "disable_thinking": self.disable_thinking,
             "json_mode": self.json_mode,
+            "context_tokens": self.context_tokens,
             "api_key_set": bool(key),
             "api_key_display": f"{key[:4]}…{key[-4:]}" if len(key) > 12 else ("••••" if key else ""),
             "source": self.source,
@@ -113,6 +186,7 @@ async def load_llm_config() -> LLMConfig:
         temperature=float(temperature) if isinstance(temperature, (int, float)) else settings.llm_temperature,
         disable_thinking=bool(stored.get("disable_thinking", settings.llm_disable_thinking)),
         json_mode=bool(stored.get("json_mode", settings.llm_json_mode)),
+        context_tokens=_optional_int(stored.get("context_tokens")),
         source=source,
     )
 
@@ -132,7 +206,7 @@ def _describe_error(exc: Exception) -> LLMError:
     if isinstance(exc, openai.APIConnectionError):
         return LLMError("Нет соединения с сервером модели: проверьте endpoint URL и сеть", detail)
     if isinstance(exc, openai.BadRequestError):
-        return LLMError("Сервер модели отклонил запрос (возможно, превышен контекст модели)", detail)
+        return LLMError("Сервер модели отклонил запрос", detail)
     if isinstance(exc, openai.APIStatusError):
         return LLMError(f"Ошибка сервера модели (HTTP {getattr(exc, 'status_code', '?')})", detail)
     return LLMError(f"Ошибка вызова AI: {exc.__class__.__name__}", detail)
@@ -162,9 +236,17 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _semaphores[loop_id]
 
 
+MIN_OUTPUT_TOKENS = 512
+SAFETY_TOKENS = 256
+
+
 class LLMClient:
     # Параметры, которые сервер отверг для данной модели — больше не отправляем
     _rejected: dict[str, set[str]] = {}
+    # Окно модели, сообщённое сервером (/v1/models или текст ошибки), и поправка к оценке токенов
+    _detected_context: dict[str, int | None] = {}
+    _learned_context: dict[str, int] = {}
+    _token_ratio: dict[str, float] = {}
 
     def __init__(self, config: LLMConfig):
         self.config = config
@@ -179,6 +261,91 @@ class LLMClient:
             timeout=settings.ai_step_timeout,
             max_retries=max(settings.ai_max_attempts - 1, 0),
         )
+
+    @property
+    def _key(self) -> str:
+        return f"{self.config.base_url}|{self.config.model}"
+
+    @classmethod
+    def forget(cls) -> None:
+        """Сбрасывает сведения об окне модели и поправку к оценке токенов."""
+        cls._detected_context.clear()
+        cls._learned_context.clear()
+        cls._token_ratio.clear()
+
+    # ---------- Контекстное окно ----------
+
+    async def _detect_context(self) -> int | None:
+        """Окно модели из /v1/models (vLLM отдаёт max_model_len); результат кэшируется."""
+        if self._key in self._detected_context:
+            return self._detected_context[self._key]
+        value = None
+        try:
+            page = await self._client.with_options(timeout=10, max_retries=0).models.list()
+            for model in page.data:
+                extra = getattr(model, "model_extra", None) or {}
+                if model.id == self.config.model or len(page.data) == 1:
+                    raw = extra.get("max_model_len") or extra.get("context_length") or extra.get("max_context_length")
+                    value = int(raw) if raw else None
+                    if model.id == self.config.model:
+                        break
+        except Exception as exc:  # noqa: BLE001 — сервер может не поддерживать /models
+            logger.info("Context window detection failed for %s: %s", self.config.model, exc.__class__.__name__)
+        self._detected_context[self._key] = value
+        return value
+
+    async def context_window(self) -> tuple[int, str]:
+        """Окно модели и его источник. Берётся наименьшее из известных значений."""
+        candidates = []
+        if self.config.context_tokens:
+            candidates.append((self.config.context_tokens, "настройки администратора"))
+        detected = await self._detect_context()
+        if detected:
+            candidates.append((detected, "сервер модели"))
+        if self._key in self._learned_context:
+            candidates.append((self._learned_context[self._key], "ошибка сервера"))
+        if not candidates:
+            return settings.llm_context_tokens, "значение по умолчанию"
+        return min(candidates)
+
+    def output_reserve(self, window: int) -> int:
+        reserve = self.config.max_tokens or settings.llm_output_reserve
+        return max(MIN_OUTPUT_TOKENS, min(reserve, window // 2))
+
+    async def input_budget(self) -> int:
+        """Сколько токенов можно отдать под промпт (system + user) с запасом на ответ."""
+        window, _ = await self.context_window()
+        return max(window - self.output_reserve(window) - SAFETY_TOKENS, 256)
+
+    @property
+    def token_ratio(self) -> float:
+        return self._token_ratio.get(self._key, 1.0)
+
+    def estimate(self, *texts: str) -> int:
+        return sum(estimate_tokens(text, self.token_ratio) for text in texts) + 8 * len(texts)
+
+    def _calibrate(self, estimated: int, actual: int | None, pessimistic: bool = False) -> None:
+        """Уточняет поправку к оценке токенов по фактическому числу токенов, которое сообщил сервер."""
+        if not actual or estimated < 500:
+            return
+        base = estimated / self.token_ratio  # оценка без поправки
+        observed = min(max(actual / base, 0.6), 1.8)
+        current = self.token_ratio
+        self._token_ratio[self._key] = max(current, observed) if pessimistic else round(0.7 * current + 0.3 * observed, 3)
+
+    def _overflow(self, exc: Exception, estimated: int) -> ContextOverflowError | None:
+        parsed = parse_context_overflow(str(exc))
+        if parsed is None:
+            return None
+        context, prompt_tokens = parsed
+        if context:
+            self._learned_context[self._key] = context
+        self._calibrate(estimated, prompt_tokens, pessimistic=True)
+        if context and prompt_tokens:
+            message = f"Запрос не поместился в контекст модели: {prompt_tokens} токенов при окне {context}"
+        else:
+            message = "Запрос не поместился в контекстное окно модели"
+        return ContextOverflowError(message, str(exc)[:1500], context, prompt_tokens)
 
     def _request_kwargs(self, system: str, user: str, json_mode: bool) -> dict[str, Any]:
         rejected = self._rejected.get(self.config.model, set())
@@ -201,6 +368,8 @@ class LLMClient:
         try:
             return await self._client.chat.completions.create(**kwargs)
         except openai.BadRequestError as exc:
+            if parse_context_overflow(str(exc)) is not None:
+                raise  # переполнение контекста — не повод отключать параметры
             message = str(exc).lower()
             for param in ("temperature", "max_tokens", "response_format", "chat_template_kwargs"):
                 key = "extra_body" if param == "chat_template_kwargs" else param
@@ -212,11 +381,30 @@ class LLMClient:
             raise
 
     async def complete(self, system: str, user: str, json_mode: bool = False) -> str:
+        kwargs = self._request_kwargs(system, user, json_mode)
+        estimated = self.estimate(system, user)
         try:
             async with _get_semaphore():
-                response = await self._create(self._request_kwargs(system, user, json_mode))
+                try:
+                    response = await self._create(kwargs)
+                except openai.APIStatusError as exc:
+                    overflow = self._overflow(exc, estimated)
+                    if overflow is None:
+                        raise
+                    room = (overflow.context_tokens or 0) - (overflow.prompt_tokens or 0) - 64
+                    if not (overflow.context_tokens and overflow.prompt_tokens) or room < MIN_OUTPUT_TOKENS:
+                        raise overflow from exc
+                    # Вход помещается, не хватает места под ответ — уменьшаем max_tokens
+                    logger.warning("Context overflow (%s/%s tokens), retrying with max_tokens=%s",
+                                   overflow.prompt_tokens, overflow.context_tokens, room)
+                    response = await self._create({**kwargs, "max_tokens": room})
+        except LLMError:
+            raise
         except Exception as exc:
-            raise _describe_error(exc) from exc
+            overflow = self._overflow(exc, estimated) if isinstance(exc, openai.APIStatusError) else None
+            raise (overflow or _describe_error(exc)) from exc
+        usage = getattr(response, "usage", None)
+        self._calibrate(estimated, getattr(usage, "prompt_tokens", None))
         if not response.choices:
             raise LLMError("Модель вернула пустой ответ")
         choice = response.choices[0]
@@ -351,7 +539,26 @@ async def complete_json_list(client: LLMClient, system: str, user: str) -> tuple
     raise LLMError("Модель вернула ответ в неверном формате (ожидался JSON-массив)", raw_retry[:1500])
 
 
+async def complete_json_object(client: LLMClient, system: str, user: str) -> dict:
+    """Запрашивает JSON-объект; при невалидном ответе делает один повтор с просьбой исправить формат."""
+    for attempt in range(2):
+        prompt = user if attempt == 0 else (
+            f"{user}\n\nВАЖНО: предыдущий ответ не удалось разобрать. Верни только валидный JSON-объект — без пояснений и markdown."
+        )
+        raw = await client.complete(system, prompt, json_mode=client.config.json_mode)
+        data = extract_json(raw)
+        if isinstance(data, list):
+            data = next((item for item in data if isinstance(item, dict)), None)
+        if isinstance(data, dict) and data:
+            return data
+    raise LLMError("Модель вернула ответ в неверном формате (ожидался JSON-объект)", (raw or "")[:1500])
+
+
 async def test_llm_connection(config: LLMConfig) -> dict:
     client = LLMClient(config)
     reply = await client.complete("Ты — тестовый ассистент. Отвечай кратко.", "Ответь одним словом: OK")
-    return {"success": True, "reply": reply.strip()[:200], "provider": config.provider, "model": config.model}
+    window, source = await client.context_window()
+    return {
+        "success": True, "reply": reply.strip()[:200], "provider": config.provider, "model": config.model,
+        "context_tokens": window, "context_source": source, "input_budget": await client.input_budget(),
+    }

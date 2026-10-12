@@ -15,7 +15,7 @@ from .config import settings
 from .db import db, ensure_indexes, now_iso
 from .errors import log_error
 from .prompts import sync_default_prompts
-from .routes import admin, analysis, auth, divisions
+from .routes import admin, analysis, auth, divisions, editing
 from .routes import settings as settings_routes
 from .security import hash_password
 
@@ -118,7 +118,7 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=503, content={"status": "error", "db": str(exc)[:200]})
         return {"status": "ok", "db": "ok"}
 
-    for module in (auth, divisions, analysis, settings_routes, admin):
+    for module in (auth, divisions, analysis, editing, settings_routes, admin):
         api.include_router(module.router)
     app.include_router(api)
 
